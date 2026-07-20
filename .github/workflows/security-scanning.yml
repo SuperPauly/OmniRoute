@@ -1,0 +1,130 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: ["release/**"]
+
+  pull_request:
+    branches: ["release/**"]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+  schedule:
+    # Every Monday at 03:23 UTC.
+    - cron: "23 3 * * 1"
+
+  workflow_dispatch:
+
+concurrency:
+  group: security-scanning-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Trivy repository scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Scan dependencies, configuration and secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+
+          format: sarif
+          output: trivy-repository.sarif
+
+          severity: MEDIUM,HIGH,CRITICAL
+          limit-severities-for-sarif: true
+          ignore-unfixed: false
+          exit-code: "0"
+
+          hide-progress: true
+          timeout: 20m0s
+          version: v0.70.0
+
+      - name: Upload Trivy results to GitHub code scanning
+        if: >-
+          ${{ always() &&
+              hashFiles('trivy-repository.sarif') != '' &&
+              (github.event_name != 'pull_request' ||
+               github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: trivy-repository.sarif
+          category: trivy/repository
+
+      - name: Preserve Trivy report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-security-report
+          path: trivy-repository.sarif
+          if-no-files-found: warn
+          retention-days: 14
+
+  gitleaks:
+    name: Gitleaks history scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+
+    steps:
+      - name: Checkout complete Git history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan complete repository history
+        shell: bash
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            ghcr.io/gitleaks/gitleaks@sha256:d09cbc6b5faa03d81ef4bf430f1a9b6468d992cd30f30ad213b0c53e057fc817 \
+            git . \
+            --log-opts="--all" \
+            --redact=100 \
+            --report-format sarif \
+            --report-path /repo/gitleaks.sarif \
+            --max-decode-depth 2 \
+            --exit-code 0
+
+      - name: Upload Gitleaks results to GitHub code scanning
+        if: >-
+          ${{ always() &&
+              hashFiles('gitleaks.sarif') != '' &&
+              (github.event_name != 'pull_request' ||
+               github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks/history
+
+      - name: Preserve Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gitleaks-security-report
+          path: gitleaks.sarif
+          if-no-files-found: warn
+          retention-days: 14
