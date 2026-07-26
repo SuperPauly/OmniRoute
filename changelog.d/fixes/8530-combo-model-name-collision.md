@@ -1,0 +1,1 @@
+- fix(api): surface a non-blocking warning + startup scan when a combo name shadows a real model id, instead of silently routing with zero signal (#8530)

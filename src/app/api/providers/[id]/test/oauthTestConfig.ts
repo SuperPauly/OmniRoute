@@ -1,5 +1,12 @@
 import { buildGitLabOAuthEndpoints, resolveGitLabOAuthBaseUrl } from "@/lib/oauth/gitlab";
 
+const CLINE_OAUTH_TEST_CONFIG = {
+  // Cline does not expose a stable lightweight auth probe. Validate token
+  // presence/expiry here; real connectivity is exercised by chat requests.
+  checkExpiry: true,
+  refreshable: true,
+};
+
 // OAuth provider test endpoints. Extracted from route.ts (#7610) so adding a
 // provider entry doesn't grow the frozen route.ts file past its check-file-size
 // cap — this module carries no logic of its own beyond the GitLab URL builder.
@@ -44,6 +51,18 @@ export const OAUTH_TEST_CONFIG = {
     authPrefix: "Bearer ",
     refreshable: true,
   },
+  // `agy` is a separate connection id that shares the Antigravity backend and the same
+  // Google OAuth token lifecycle (tokenRefresh.ts routes it to refreshGoogleToken), but
+  // it was missing here — so "Test Connection" fell through to "Provider test not
+  // supported", recorded testStatus="error", and painted the home topology node red on a
+  // perfectly good account. Probe the same userinfo endpoint as antigravity.
+  agy: {
+    url: "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    refreshable: true,
+  },
   xai: {
     url: "https://api.x.ai/v1/chat/completions",
     method: "POST",
@@ -75,12 +94,6 @@ export const OAUTH_TEST_CONFIG = {
     authPrefix: "Bearer ",
     refreshable: true,
   },
-  qwen: {
-    // DashScope (previously portal.qwen.ai) /v1/models might return 404 or auth issues.
-    // Use checkExpiry instead — actual connectivity is validated via real requests.
-    checkExpiry: true,
-    refreshable: true,
-  },
   cursor: {
     checkExpiry: true,
   },
@@ -93,13 +106,9 @@ export const OAUTH_TEST_CONFIG = {
     // Validate using token presence/expiry as a lightweight auth check.
     checkExpiry: true,
   },
-  cline: {
-    // Cline's /api/v1/models endpoint frequently returns stale auth errors even
-    // with fresh tokens. Use checkExpiry instead — actual connectivity is validated
-    // via real requests.
-    checkExpiry: true,
-    refreshable: true,
-  },
+  cline: CLINE_OAUTH_TEST_CONFIG,
+  // ClinePass reuses the same WorkOS OAuth flow and token lifecycle as Cline.
+  clinepass: CLINE_OAUTH_TEST_CONFIG,
   kiro: {
     checkExpiry: true,
     refreshable: true,
@@ -115,13 +124,23 @@ export const OAUTH_TEST_CONFIG = {
     checkExpiry: true,
     refreshable: true,
   },
+  "devin-cli": {
+    // Same gap as grok-cli #7610: absent from this table, so "Test Connection"
+    // always fell through to "Provider test not supported" and left a working
+    // connection showing a red ERR badge. There is no HTTP probe to hit — the
+    // executor drives the local `devin` binary over ACP stdio and the binary
+    // owns its own credentials (`devin auth login`), so there is no refresh
+    // token to rotate either. Validate on token presence/expiry; real
+    // connectivity is proven by every chat/completions request.
+    checkExpiry: true,
+  },
   "grok-cli": {
     // #7610: was entirely absent from OAUTH_TEST_CONFIG, so "Test Connection"
     // always fell through to the generic "Provider test not supported" branch
     // below. Grok Build's cli-chat-proxy endpoint doesn't expose a lightweight
     // userinfo probe, and it enforces cli-specific headers (see
     // GrokCliExecutor.buildHeaders) that this shared prober doesn't send — so
-    // mirror qwen/cline/kilocode's checkExpiry pattern instead of a live probe.
+    // mirror cline/kilocode's checkExpiry pattern instead of a live probe.
     // Real connectivity is still validated on every chat/completions request.
     checkExpiry: true,
     refreshable: true,
@@ -130,8 +149,7 @@ export const OAUTH_TEST_CONFIG = {
     // GHE Copilot: probe the enterprise user-info endpoint derived from gheUrl
     // (stored in providerSpecificData).
     getUrl: (connection: any) => {
-      const gheUrl =
-        connection?.providerSpecificData?.gheUrl || connection?.gheUrl || "";
+      const gheUrl = connection?.providerSpecificData?.gheUrl || connection?.gheUrl || "";
       const base = gheUrl.replace(/\/+$/, "");
       return `${base}/api/v3/user`;
     },

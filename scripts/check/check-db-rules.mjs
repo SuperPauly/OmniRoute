@@ -48,6 +48,7 @@ export const INTENTIONALLY_INTERNAL = new Set([
   "comboForecast", // intentionally-internal: src/lib/usage/comboForecast.ts
   "commandCodeAuth", // intentionally-internal: 5 API routes em /api/providers/command-code/auth/*
   "compression", // intentionally-internal: 2 API routes (settings/compression, context/rtk/config)
+  "compressionDetailNormalizers", // db-internal: importado só por db/compression.ts (normalizeSessionDedupConfig/normalizeCcrConfig/buildDetailConfigDefaults/applyDetailConfigUpdate — normalizadores do detail-config split do compression.ts, #8404)
   "vacuumScheduler", // intentionally-internal: src/instrumentation-node.ts (dynamic import, lifecycle wiring per Rule #2)
   "detailedLogs", // intentionally-internal: 3 callers (callLogs.ts, logs/detail route, embeddings handler)
   "discovery", // DEAD?: 0 importers na auditoria de 2026-06-11; lib/discovery/index.ts não usa db/discovery
@@ -65,6 +66,7 @@ export const INTENTIONALLY_INTERNAL = new Set([
   "providerNodeSelect", // db-internal: importado só por db/providers.ts (selectProviderNodeForConnection — lógica pura de seleção de provider node split do providers.ts, #4421)
   "providerStats", // intentionally-internal: src/app/api/provider-stats/route.ts
   "proxyLatency", // intentionally-internal: imported directly by src/lib/db/proxies.ts (anti-barrel, #6798)
+  "proxySubscriptions", // db-internal: importado só por db/proxies.ts (addProxiesToScopePool — split do proxies.ts para ficar sob o cap de tamanho congelado, #7299); a função já é re-exportada por proxies.ts (que localDb.ts re-exporta)
   "recovery", // intentionally-internal: bin/cli/runtime.mjs (import() dinâmico) + tests
   "schemaColumns", // db-internal: importado só por db/core.ts (ensureProviderConnections/UsageHistory/CallLogsColumns + hasColumn/hasTable/getTableColumns — schema-column reconciliation split do core.ts, #4948)
   "secrets", // intentionally-internal: src/instrumentation-node.ts (import() dinâmico na inicialização)

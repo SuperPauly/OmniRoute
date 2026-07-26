@@ -1,0 +1,1 @@
+- fix(providers): persist a runtime-discovered Antigravity projectId back onto the connection so it survives token refreshes and restarts instead of being rediscovered or lost (#8491)

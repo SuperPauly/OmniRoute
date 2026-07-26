@@ -1,5 +1,7 @@
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import {
+  CLAUDE_CLI_BILLING_VERSION,
+  CLAUDE_CLI_STAINLESS_RUNTIME_VERSION,
   mergeClientAnthropicBeta,
   normalizeAnthropicHeaderVariants,
 } from "../config/anthropicHeaders.ts";
@@ -45,6 +47,7 @@ import {
   appendAnthropicBetaHeader,
   CONTEXT_1M_BETA_HEADER,
   enforceThinkingTemperature,
+  modelHasNativeContext1m,
   modelSupportsContext1mBeta,
 } from "../services/claudeCodeCompatible.ts";
 import { getClaudeCodeCompatibleRequestDefaults } from "@/lib/providers/requestDefaults";
@@ -67,7 +70,6 @@ import { randomUUID } from "node:crypto";
 import {
   CLAUDE_CODE_VERSION,
   CLAUDE_CODE_STAINLESS_VERSION,
-  buildHashFor,
   buildUserIdJson,
   getSessionId,
   parseUpstreamMetadataUserId,
@@ -77,7 +79,6 @@ import {
   selectBetaFlags,
   stainlessArch,
   stainlessOS,
-  stainlessRuntimeVersion,
   stripProxyToolPrefix,
 } from "./claudeIdentity.ts";
 import { withForcedResponsesUpstream } from "./forceResponsesUpstream.ts";
@@ -88,6 +89,7 @@ import {
   stripStainlessHeadersForOpenAICompat,
 } from "./base/headers.ts";
 import { applyPeerTraceHeader } from "@/shared/resilience/peerRouting";
+import { applyClineProtocolHeaders } from "@/shared/utils/clineAuth";
 // Header helpers extracted to a pure leaf; re-exported for external importers
 // (executors + tests) that import them from "./base.ts".
 export {
@@ -142,6 +144,7 @@ export type ProviderCredentials = {
   accessToken?: string;
   refreshToken?: string;
   apiKey?: string;
+  email?: string | null;
   projectId?: string | null;
   expiresAt?: string;
   connectionId?: string; // T07: used for API key rotation index
@@ -251,6 +254,25 @@ export function stripVersionedToolModelPrefix(tools: unknown): void {
  * Implements the Strategy pattern: subclasses override specific methods
  * (buildUrl, buildHeaders, transformRequest, etc.) for each provider.
  */
+/**
+ * What an executor's `execute()` may resolve to.
+ *
+ * Both arms are real: the web/scraping executors return a bare `Response` from their
+ * error and passthrough paths, while the HTTP executors return the richer capture
+ * object used for upstream request logging. `normalizeExecutorResult()` accepts
+ * exactly this union and wraps the bare form, so the contract is the union — not the
+ * object shape that `BaseExecutor.execute` happens to infer from its single return.
+ */
+export type ExecutorExecuteResult =
+  | Response
+  | {
+      response: Response;
+      url?: string;
+      headers?: Record<string, string>;
+      transformedBody?: unknown;
+      transport?: string;
+    };
+
 export class BaseExecutor {
   provider: string;
   config: ProviderConfig;
@@ -350,12 +372,15 @@ export class BaseExecutor {
       (credentials.providerSpecificData?.extraApiKeys as string[] | undefined) ?? [];
     const selectedKeyId = (credentials.providerSpecificData as Record<string, unknown> | undefined)
       ?.selectedKeyId as string | undefined;
+    const validExtras = extraKeys.filter((k) => typeof k === "string" && k.trim().length > 0);
     let effectiveKey = credentials.apiKey;
-    if (extraKeys.length > 0 && credentials.connectionId && credentials.apiKey) {
+    // Rotate whenever extras exist — including empty primary + populated extras (#8467).
+    // getValidApiKey already skips a blank primary and round-robins the extras alone.
+    if (validExtras.length > 0 && credentials.connectionId) {
       const resolved = resolveKeyForRequest(
         credentials.connectionId,
-        credentials.apiKey,
-        extraKeys,
+        credentials.apiKey || "",
+        validExtras,
         selectedKeyId ?? null
       );
       effectiveKey = resolved?.key ?? credentials.apiKey;
@@ -410,7 +435,7 @@ export class BaseExecutor {
 
     if (credentials.accessToken) {
       headers["Authorization"] = `Bearer ${credentials.accessToken}`;
-    } else if (credentials.apiKey) {
+    } else if (effectiveKey) {
       headers["Authorization"] = `Bearer ${effectiveKey}`;
     }
 
@@ -579,7 +604,7 @@ export class BaseExecutor {
     }
   }
 
-  async execute(input: ExecuteInput) {
+  async execute(input: ExecuteInput): Promise<ExecutorExecuteResult> {
     const {
       model,
       body,
@@ -726,7 +751,9 @@ export class BaseExecutor {
         modelSupportsContext1mBeta(model) &&
         !isClaudeCodeCompatible(this.provider);
       const shouldForwardCcCompatibleContext1m =
-        isClaudeCodeCompatible(this.provider) && ccRequestDefaults.context1m === true;
+        isClaudeCodeCompatible(this.provider) &&
+        ccRequestDefaults.context1m === true &&
+        !modelHasNativeContext1m(model);
       if (shouldForwardExtendedContext || shouldForwardCcCompatibleContext1m) {
         appendAnthropicBetaHeader(headers, CONTEXT_1M_BETA_HEADER);
       }
@@ -989,9 +1016,7 @@ export class BaseExecutor {
 
           // system[0] (billing) and system[1] (sentinel) must not carry
           // cache_control — that belongs on upstream prompt blocks at [2..].
-          const dayStamp = new Date().toISOString().slice(0, 10);
-          const buildHash = buildHashFor(CLAUDE_CODE_VERSION, dayStamp);
-          const billingLine = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.${buildHash}; cc_entrypoint=cli; cch=00000;`;
+          const billingLine = `x-anthropic-billing-header: cc_version=${CLAUDE_CLI_BILLING_VERSION}; cc_entrypoint=cli; cch=00000;`;
           const SENTINEL = "You are Claude Code, Anthropic's official CLI for Claude.";
 
           const sysBlocks: Array<Record<string, unknown>> = Array.isArray(tb.system)
@@ -1079,13 +1104,13 @@ export class BaseExecutor {
           Object.assign(headers, ccHeaders);
           delete headers["X-Stainless-Helper-Method"];
 
-          // Stainless OS/Arch/Runtime are host-derived (Stainless SDK does the
-          // same at runtime). Hardcoding them was a unique-per-deployment tell.
+          // OS/arch follow the host running the signed binary. Runtime version
+          // is pinned to the captured CLI wire image, not OmniRoute's Node.
           headers["X-Stainless-Arch"] = stainlessArch();
           headers["X-Stainless-Lang"] = "js";
           headers["X-Stainless-OS"] = stainlessOS();
           headers["X-Stainless-Runtime"] = "node";
-          headers["X-Stainless-Runtime-Version"] = stainlessRuntimeVersion();
+          headers["X-Stainless-Runtime-Version"] = CLAUDE_CLI_STAINLESS_RUNTIME_VERSION;
           headers["X-Stainless-Retry-Count"] = "0";
           delete headers["X-Stainless-Os"];
 
@@ -1190,6 +1215,11 @@ export class BaseExecutor {
         }
 
         mergeUpstreamExtraHeaders(finalHeaders, upstreamExtraHeaders);
+        if (this.provider === "cline" || this.provider === "clinepass") {
+          applyClineProtocolHeaders(finalHeaders, {
+            taskId: headers["X-Task-ID"],
+          });
+        }
         // Enforce peer tracing after all configurable headers have been merged so
         // operator/provider metadata cannot accidentally erase the loop guard.
         applyPeerTraceHeader(finalHeaders, clientHeaders, url);
@@ -1236,7 +1266,9 @@ export class BaseExecutor {
         // to `:free` models only — no-op (and no extra work) for every other
         // OpenRouter request or provider.
         const openrouterFreeWindowAccountKey =
-          this.provider === "openrouter" && isFreeVariantModel(model) && activeCredentials.connectionId
+          this.provider === "openrouter" &&
+          isFreeVariantModel(model) &&
+          activeCredentials.connectionId
             ? resolveAccountKey(activeCredentials.connectionId, activeCredentials)
             : null;
         if (openrouterFreeWindowAccountKey) {

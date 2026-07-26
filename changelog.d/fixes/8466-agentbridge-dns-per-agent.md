@@ -1,0 +1,1 @@
+- fix(backend): compute AgentBridge diagnose `dnsConfigured` per-agent instead of hard-coded to Antigravity hosts (#8466)

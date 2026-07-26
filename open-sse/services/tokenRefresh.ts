@@ -5,17 +5,39 @@
 // file keeps the orchestrator (refreshAccessToken, getAccessToken), the
 // in-flight/rotation dedup maps, the CAS guard, and refreshWithRetry — the
 // cross-provider plumbing. The provider-module split was originally proposed
-// by KooshaPari in PR #7338 (base was too old to merge as-is); redone here on
-// the current tip, credit preserved via co-authorship on the extraction
-// commits. All previously-public exports are re-exported below so existing
+// by KooshaPari in PR #7338, whose base was too old to merge as-is; this is an
+// independent implementation of the same idea against the current tip, not a
+// reuse of that diff. All previously-public exports are re-exported below so existing
 // importers (open-sse/index.ts, executors, src/sse/services/tokenRefresh.ts,
 // tests) are unaffected.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { pbkdf2Sync } from "node:crypto";
 import { PROVIDERS } from "../config/constants.ts";
 import { runWithProxyContext } from "../utils/proxyFetch.ts";
-import { serializeRefresh, wasRefreshTokenRotated } from "./refreshSerializer.ts";
-import { extractOAuthErrorCode, type RefreshLogger } from "./tokenRefresh/shared.ts";
+import { serializeRefresh } from "./refreshSerializer.ts";
+import {
+  extractOAuthErrorCode,
+  isUnrecoverableRefreshError,
+  type RefreshLogger,
+} from "./tokenRefresh/shared.ts";
+import {
+  getRefreshCacheKey,
+  lookupRotation,
+  recordRotation,
+  _getTokenRotationMapStats,
+  _clearTokenRotationMap,
+} from "./tokenRefresh/rotationMap.ts";
+import {
+  runWithCasGuard,
+  getActiveCasGuard,
+  getCasGuardStats,
+  _resetCasGuardStats,
+  casGuardShouldSkipPersist,
+} from "./tokenRefresh/casGuard.ts";
+import {
+  isProviderBlocked,
+  getCircuitBreakerStatus,
+  refreshWithRetry,
+} from "./tokenRefresh/circuitBreaker.ts";
 import { refreshWindsurfToken } from "./tokenRefresh/providers/windsurf.ts";
 import { refreshCodebuddyCnToken } from "./tokenRefresh/providers/codebuddyCn.ts";
 import { refreshClineToken } from "./tokenRefresh/providers/cline.ts";
@@ -23,7 +45,6 @@ import { refreshKimiCodingToken } from "./tokenRefresh/providers/kimiCoding.ts";
 import { refreshGitLabDuoToken } from "./tokenRefresh/providers/gitlabDuo.ts";
 import { refreshClaudeOAuthToken } from "./tokenRefresh/providers/claudeOAuth.ts";
 import { refreshGoogleToken } from "./tokenRefresh/providers/google.ts";
-import { refreshQwenToken } from "./tokenRefresh/providers/qwen.ts";
 import { refreshCodexToken } from "./tokenRefresh/providers/codex.ts";
 import { refreshKiroToken } from "./tokenRefresh/providers/kiro.ts";
 import { refreshQoderToken } from "./tokenRefresh/providers/qoder.ts";
@@ -38,13 +59,22 @@ export {
   refreshGitLabDuoToken,
   refreshClaudeOAuthToken,
   refreshGoogleToken,
-  refreshQwenToken,
   refreshCodexToken,
   refreshKiroToken,
   refreshQoderToken,
   refreshGitHubToken,
   refreshCopilotToken,
   extractOAuthErrorCode,
+  isUnrecoverableRefreshError,
+  isProviderBlocked,
+  getCircuitBreakerStatus,
+  refreshWithRetry,
+  runWithCasGuard,
+  getActiveCasGuard,
+  getCasGuardStats,
+  _resetCasGuardStats,
+  _getTokenRotationMapStats,
+  _clearTokenRotationMap,
 };
 
 // Default token expiry buffer (refresh if expires within 5 minutes).
@@ -77,13 +107,13 @@ export const REFRESH_LEAD_MS: Record<string, number> = {
   "gitlab-duo": 5 * 60 * 1000, // GitLab token family revocation on misuse
   kiro: 5 * 60 * 1000, // AWS SSO OIDC issues one-time-use refresh tokens
   "kimi-coding": 5 * 60 * 1000, // Moonshot rotates per-refresh
-  qwen: 5 * 60 * 1000, // Alibaba device-code path also rotates
   // Non-rotating providers — longer lead is safe.
   iflow: 24 * 60 * 60 * 1000, // 24 hours
   // Google OAuth refresh_tokens are permanent (non-rotating) — longer lead
   // is safe and reduces unnecessary upstream chatter.
   antigravity: 15 * 60 * 1000,
   agy: 15 * 60 * 1000, // same Google backend as antigravity (non-rotating refresh tokens)
+  "gemini-cli": 15 * 60 * 1000, // legacy stored connections; provider is no longer public
 };
 
 /**
@@ -107,8 +137,6 @@ export function getRefreshLeadMs(
   return REFRESH_LEAD_MS[provider] ?? TOKEN_EXPIRY_BUFFER_MS;
 }
 
-const CACHE_SECRET = "omniroute-token-cache";
-
 // In-flight refresh promise cache to prevent race conditions
 // Key: "provider:sha256(refreshToken)" → Value: Promise<result>
 const refreshPromiseCache = new Map();
@@ -118,75 +146,9 @@ const refreshPromiseCache = new Map();
 // Primary dedup when credentials.connectionId is present; refreshPromiseCache is fallback.
 const connectionRefreshMutex = new Map();
 
-// ─── Token Rotation Map (codex-multi-auth pattern) ─────────────────────────
-//
-// When a rotating-token provider (Codex, Kimi, GitLab Duo, etc.) refreshes,
-// the old refresh_token is consumed and a new one is issued. Any subsequent
-// caller arriving with the OLD token would, without protection, hit upstream
-// and trigger "refresh_token_reused" — which Auth0 treats as a security event
-// and invalidates the entire token family.
-//
-// This in-memory map caches RECENT rotations so a stale caller can be redirected
-// to the new tokens WITHOUT touching upstream. The DB staleness check inside
-// the per-connection mutex covers the same scenario when connectionId is known,
-// but not all callers pass connectionId (e.g., legacy code paths, retries that
-// snapshot credentials before the rotation lands in DB).
-//
-// Ported from ndycode/codex-multi-auth (lib/refresh-queue.ts:218-248), the only
-// publicly known tool that reliably sustains multiple Codex OAuth accounts.
-//
-// Key format: `provider:sha256(oldRefreshToken)`
-// Value: { result: tokens, expiresAt: ms_since_epoch }
-type RotationEntry = {
-  result: { accessToken: string; refreshToken: string; expiresIn?: number; expiresAt?: string };
-  expiresAt: number;
-};
-const tokenRotationMap = new Map<string, RotationEntry>();
-const ROTATION_MAP_TTL_MS = 60 * 1000; // 60 seconds — long enough to catch in-flight stale callers
-
-function cleanupRotationMap(now: number = Date.now()): void {
-  if (tokenRotationMap.size === 0) return;
-  for (const [key, entry] of tokenRotationMap.entries()) {
-    if (entry.expiresAt <= now) tokenRotationMap.delete(key);
-  }
-}
-
-function lookupRotation(provider: string, refreshToken: string): RotationEntry | undefined {
-  cleanupRotationMap();
-  const key = getRefreshCacheKey(provider, refreshToken);
-  const entry = tokenRotationMap.get(key);
-  if (!entry) return undefined;
-  if (entry.expiresAt <= Date.now()) {
-    tokenRotationMap.delete(key);
-    return undefined;
-  }
-  return entry;
-}
-
-function recordRotation(
-  provider: string,
-  oldRefreshToken: string,
-  result: { accessToken: string; refreshToken: string; expiresIn?: number; expiresAt?: string }
-): void {
-  if (!oldRefreshToken || !result.refreshToken || oldRefreshToken === result.refreshToken) {
-    return;
-  }
-  const key = getRefreshCacheKey(provider, oldRefreshToken);
-  tokenRotationMap.set(key, {
-    result,
-    expiresAt: Date.now() + ROTATION_MAP_TTL_MS,
-  });
-}
-
-// Exported for tests + diagnostics; not part of the public API surface.
-export function _getTokenRotationMapStats(): { size: number; entries: number } {
-  cleanupRotationMap();
-  return { size: tokenRotationMap.size, entries: tokenRotationMap.size };
-}
-
-export function _clearTokenRotationMap(): void {
-  tokenRotationMap.clear();
-}
+// Token Rotation Map (codex-multi-auth pattern) lives in
+// ./tokenRefresh/rotationMap.ts — see that leaf for the in-memory rotation
+// cache + getRefreshCacheKey. Imported above and re-exported for tests.
 
 // AsyncLocalStorage for plumbing `onPersist` through executor.refreshCredentials
 // without modifying every executor's signature. The chatCore.ts / base.ts call
@@ -210,88 +172,13 @@ export function getActiveOnPersist(): RefreshPersistFn | undefined {
   return onPersistStore.getStore();
 }
 
-// ── #4038: compare-and-swap (CAS) guard on the refresh persist ───────────────
-// Fix A makes [network refresh + DB write] atomic *for a single connection's
-// mutex*. It does NOT protect against a THIRD writer (a sibling process, a
-// concurrent HealthCheck, or a replica) landing a fresher rotation on the same
-// `connection_id` between the moment the caller read the row and the moment this
-// persist runs. Overwriting that fresher row reverts the sibling's rotation, the
-// next caller loads the reverted (now-consumed) refresh_token, and Auth0/Anthropic
-// revoke the whole token family (the 1352× claude/aa5dd5cf invalidation storm).
-//
-// The CAS guard carries the refresh_token the caller PRESENTED (the version token,
-// since refresh_tokens rotate on every refresh) plus a `reread` of the row's
-// current refresh_token. Right before persisting, `getAccessToken` re-reads and, if
-// a concurrent writer already rotated the row past the presented token, SKIPS the
-// persist so the DB stays at the fresher state. The caller still receives the new
-// accessToken — upstream already authenticated the request; only the DB write is
-// skipped. No active guard ⇒ behavior is byte-identical to before (opt-in).
-type CasGuard = {
-  /** The refresh_token the caller presented for this refresh (CAS version token). */
-  expectedRefreshToken: string | null;
-  /** Re-reads the CURRENT persisted refresh_token for this connection (decrypted). */
-  reread: () => Promise<string | null | undefined>;
-};
-const casGuardStore = new AsyncLocalStorage<CasGuard>();
-const casGuardStats = { skipped: 0, persisted: 0 };
+// #4038 compare-and-swap (CAS) guard on the refresh persist lives in
+// ./tokenRefresh/casGuard.ts — imported above and re-exported for tests.
+// casGuardShouldSkipPersist is imported and used by getAccessToken below.
 
-export function runWithCasGuard<T>(
-  guard: CasGuard | undefined | null,
-  fn: () => Promise<T>
-): Promise<T> {
-  if (!guard) return fn();
-  return casGuardStore.run(guard, fn);
-}
-
-export function getActiveCasGuard(): CasGuard | undefined {
-  return casGuardStore.getStore();
-}
-
-/** Skip/persist counters for observability + tests. */
-export function getCasGuardStats(): { skipped: number; persisted: number } {
-  return { ...casGuardStats };
-}
-
-/** Test-only: reset the CAS counters between cases. */
-export function _resetCasGuardStats(): void {
-  casGuardStats.skipped = 0;
-  casGuardStats.persisted = 0;
-}
-
-/**
- * Returns true when the persist should be SKIPPED because a concurrent writer
- * already rotated the row's refresh_token past the one we presented (CAS mismatch).
- * Best-effort: any reread failure falls through to persist (never blocks recovery).
- */
-async function casGuardShouldSkipPersist(log?: RefreshLogger): Promise<boolean> {
-  const guard = getActiveCasGuard();
-  if (!guard || !guard.expectedRefreshToken) return false;
-  let current: string | null | undefined;
-  try {
-    current = await guard.reread();
-  } catch {
-    return false; // reread failed — fall through to persist (best-effort)
-  }
-  // wasRefreshTokenRotated is true iff both are non-empty AND current !== expected.
-  if (wasRefreshTokenRotated(guard.expectedRefreshToken, current)) {
-    casGuardStats.skipped++;
-    log?.warn?.(
-      "TOKEN_REFRESH",
-      "CAS guard: skipping persist — a concurrent writer already rotated the refresh_token (#4038)"
-    );
-    return true;
-  }
-  casGuardStats.persisted++;
-  return false;
-}
-
-function getRefreshCacheKey(provider, refreshToken) {
-  const tokenHash = pbkdf2Sync(refreshToken, CACHE_SECRET, 1000, 32, "sha256").toString("hex");
-  return `${provider}:${tokenHash}`;
-}
-
-// extractOAuthErrorCode lives in ./tokenRefresh/shared.ts (imported above, re-exported below) —
-// used both by the generic orchestrator below and by every per-provider refresh module.
+// extractOAuthErrorCode + isUnrecoverableRefreshError live in
+// ./tokenRefresh/shared.ts (imported above, re-exported below) — used both by
+// the generic orchestrator below and by every per-provider refresh module.
 
 /**
  * Refresh OAuth access token using refresh token
@@ -374,6 +261,18 @@ export async function refreshAccessToken(
  */
 async function _getAccessTokenInternal(provider, credentials, log, proxyConfig: unknown = null) {
   switch (provider) {
+    case "gemini-cli":
+      // Legacy DB rows can retain this discontinued provider id. Refresh them
+      // with the same public OAuth client used by Gemini CLI without restoring
+      // gemini-cli to the routable provider or OAuth UI registries.
+      return await refreshGoogleToken(
+        credentials.refreshToken,
+        PROVIDERS.gemini.clientId,
+        PROVIDERS.gemini.clientSecret,
+        log,
+        proxyConfig
+      );
+
     case "gemini":
     case "antigravity":
     case "agy":
@@ -390,9 +289,6 @@ async function _getAccessTokenInternal(provider, credentials, log, proxyConfig: 
 
     case "codex":
       return await refreshCodexToken(credentials.refreshToken, log, proxyConfig);
-
-    case "qwen":
-      return await refreshQwenToken(credentials.refreshToken, log, proxyConfig);
 
     case "qoder":
       return await refreshQoderToken(credentials.refreshToken, log, proxyConfig);
@@ -453,11 +349,11 @@ async function _getAccessTokenInternal(provider, credentials, log, proxyConfig: 
 export function supportsTokenRefresh(provider) {
   const explicitlySupported = new Set([
     "gemini",
+    "gemini-cli", // legacy refresh compatibility only; not a routable provider
     "antigravity",
     "agy",
     "claude",
     "codex",
-    "qwen",
     "qoder",
     "github",
     "kiro",
@@ -465,7 +361,11 @@ export function supportsTokenRefresh(provider) {
     "cline",
     "kimi-coding",
     "windsurf",
-    "devin-cli",
+    // #8407: do NOT list "devin-cli" here. It is import-token / local-CLI owned
+    // (`devin auth login`); connections never carry a refresh token. Leaving it
+    // in this set made tokenHealthCheck treat it as refresh-capable and force
+    // testStatus="expired" / errorCode="no_refresh_token". Keep it out of the
+    // explicit set (same idea as not listing non-refresh local-CLI providers).
     "gitlab-duo",
     "codebuddy-cn",
   ]);
@@ -474,21 +374,9 @@ export function supportsTokenRefresh(provider) {
   return !!(config?.refreshUrl || config?.tokenUrl);
 }
 
-/**
- * Check if a refresh result indicates an unrecoverable error
- * (e.g. the refresh token was already consumed and cannot be reused).
- * Callers should stop retrying and request re-authentication.
- */
-export function isUnrecoverableRefreshError(result) {
-  return (
-    result &&
-    typeof result === "object" &&
-    (result.error === "unrecoverable_refresh_error" ||
-      result.error === "refresh_token_reused" ||
-      result.error === "invalid_request" ||
-      result.error === "invalid_grant")
-  );
-}
+// isUnrecoverableRefreshError lives in ./tokenRefresh/shared.ts (imported above
+// and re-exported) — used by refreshWithRetry (./tokenRefresh/circuitBreaker.ts)
+// and by callers that need to classify a refresh result.
 
 /**
  * Get access token for a specific provider (with deduplication).
@@ -767,7 +655,6 @@ export function formatProviderCredentials(provider, credentials, log) {
       };
 
     case "codex":
-    case "qwen":
     case "qoder":
     case "openai":
     case "openrouter":
@@ -819,51 +706,10 @@ export async function getAllAccessTokens(userInfo, log) {
   return results;
 }
 
-/**
- * Refresh token with retry and exponential backoff
- * Retries on failure with increasing delay: 1s, 2s, 3s...
- *
- * Includes:
- * - Per-provider circuit breaker (5 consecutive failures → 30min pause)
- * - 30s timeout per refresh attempt to prevent hanging connections
- *
- * @param {function} refreshFn - Async function that returns token or null
- * @param {number} maxRetries - Max retry attempts (default 3)
- * @param {object} log - Logger instance (optional)
- * @param {string} provider - Provider ID for circuit breaker tracking (optional)
- * @returns {Promise<object|null>} Token result or null if all retries fail
- */
-
-// ─── Circuit Breaker State ──────────────────────────────────────────────────
-const _circuitBreaker: Record<string, { failures: number; blockedUntil: number }> = {};
-const CIRCUIT_BREAKER_THRESHOLD = 5; // consecutive failures before tripping
-const CIRCUIT_BREAKER_COOLDOWN = 30 * 60 * 1000; // 30 minutes
-const REFRESH_TIMEOUT_MS = 30_000; // 30s max per refresh attempt
-
-interface CircuitBreakerStatusEntry {
-  failures: number;
-  blocked: boolean;
-  blockedUntil: string | null;
-  remainingMs: number;
-}
-
-interface RefreshLoggerLike {
-  error?: (scope: string, message: string) => void;
-  warn?: (scope: string, message: string) => void;
-}
-
-/**
- * Check if a provider is circuit-breaker blocked.
- */
-export function isProviderBlocked(provider: string): boolean {
-  const state = _circuitBreaker[provider];
-  if (!state) return false;
-  if (!state.blockedUntil) return false;
-  if (state.blockedUntil > Date.now()) return true;
-  // Cooldown expired — reset
-  delete _circuitBreaker[provider];
-  return false;
-}
+// Per-provider circuit breaker + refreshWithRetry + withTimeout live in
+// ./tokenRefresh/circuitBreaker.ts — imported above and re-exported for tests.
+// isProviderBlocked / getCircuitBreakerStatus / refreshWithRetry are
+// re-exported from that leaf.
 
 /**
  * Get active per-connection mutex entries (for diagnostics/metrics).
@@ -875,115 +721,4 @@ export function getConnectionRefreshMutexStatus(): Record<string, { waiters: num
     result[connectionId] = { waiters: entry.waiters };
   }
   return result;
-}
-
-/**
- * Get circuit breaker status for all providers (for diagnostics).
- */
-export function getCircuitBreakerStatus(): Record<string, CircuitBreakerStatusEntry> {
-  const result: Record<string, CircuitBreakerStatusEntry> = {};
-  for (const [provider, state] of Object.entries(_circuitBreaker)) {
-    result[provider] = {
-      failures: state.failures,
-      blocked: state.blockedUntil > Date.now(),
-      blockedUntil:
-        state.blockedUntil > Date.now() ? new Date(state.blockedUntil).toISOString() : null,
-      remainingMs: Math.max(0, state.blockedUntil - Date.now()),
-    };
-  }
-  return result;
-}
-
-/**
- * Record a successful refresh — resets circuit breaker for provider.
- */
-function recordSuccess(provider: string) {
-  if (_circuitBreaker[provider]) {
-    delete _circuitBreaker[provider];
-  }
-}
-
-/**
- * Record a failed refresh — increments circuit breaker counter.
- */
-function recordFailure(provider: string, log: RefreshLoggerLike | null = null) {
-  if (!_circuitBreaker[provider]) {
-    _circuitBreaker[provider] = { failures: 0, blockedUntil: 0 };
-  }
-  _circuitBreaker[provider].failures++;
-
-  if (_circuitBreaker[provider].failures >= CIRCUIT_BREAKER_THRESHOLD) {
-    _circuitBreaker[provider].blockedUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN;
-    log?.error?.(
-      "TOKEN_REFRESH",
-      `🔴 Circuit breaker tripped for ${provider}: ${CIRCUIT_BREAKER_THRESHOLD} consecutive failures. ` +
-        `Blocked for ${CIRCUIT_BREAKER_COOLDOWN / 60000}min. Provider needs re-authentication.`
-    );
-  }
-}
-
-/**
- * Execute a function with a timeout.
- */
-async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T | null> {
-  return await new Promise<T | null>((resolve, reject) => {
-    const timer = setTimeout(() => resolve(null), timeoutMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      (timer as { unref?: () => void }).unref?.();
-    }
-
-    fn().then(
-      (result) => {
-        clearTimeout(timer);
-        resolve(result);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-
-export async function refreshWithRetry(
-  refreshFn,
-  maxRetries = 3,
-  log: RefreshLogger = null,
-  provider = "unknown"
-) {
-  // Circuit breaker check
-  if (isProviderBlocked(provider)) {
-    log?.warn?.("TOKEN_REFRESH", `⚡ Circuit breaker active for ${provider}, skipping refresh`);
-    return null;
-  }
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    if (attempt > 0) {
-      const delay = attempt * 1000;
-      log?.debug?.("TOKEN_REFRESH", `Retry ${attempt}/${maxRetries} after ${delay}ms`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-
-    try {
-      const result = await withTimeout(refreshFn, REFRESH_TIMEOUT_MS);
-      if (isUnrecoverableRefreshError(result)) {
-        log?.warn?.(
-          "TOKEN_REFRESH",
-          `Unrecoverable refresh error for ${provider}: ${result.error} — skipping retries`
-        );
-        return result;
-      }
-      if (result) {
-        recordSuccess(provider);
-        return result;
-      }
-    } catch (error) {
-      log?.warn?.("TOKEN_REFRESH", `Attempt ${attempt + 1}/${maxRetries} failed: ${error.message}`);
-    }
-  }
-
-  // All retries exhausted — record failure for circuit breaker
-  recordFailure(provider, log);
-  log?.error?.("TOKEN_REFRESH", `All ${maxRetries} retry attempts failed for ${provider}`);
-  return null;
 }

@@ -215,7 +215,6 @@ export function readBooleanToggle(value: unknown, fallback: boolean): boolean {
 export const CONFIGURABLE_BASE_URL_PROVIDERS = new Set([
   "azure-openai",
   "azure-ai",
-  "bailian-coding-plan",
   "xiaomi-mimo",
   "siliconflow",
   "heroku",
@@ -224,6 +223,16 @@ export const CONFIGURABLE_BASE_URL_PROVIDERS = new Set([
   "searxng-search",
   "petals",
   "comfyui",
+  // #7447 — Moonshot/Kimi's international host (api.moonshot.ai) rejects
+  // CN-region keys (issued on platform.kimi.com/moonshot.cn — a separate
+  // account/keyspace). Neither "kimi" (legacy id) nor "moonshot" (current
+  // user-facing id) previously exposed a base-URL field at Add-connection
+  // time, so a CN-region user had no way to point a new connection at
+  // api.moonshot.cn. resolveBaseUrl()/buildUrl() already honor a
+  // providerSpecificData.baseUrl override generically — this only exposes
+  // the existing override affordance for these two ids.
+  "kimi",
+  "moonshot",
 ]);
 
 export const DEFAULT_PROVIDER_BASE_URLS: Record<string, string> = {
@@ -235,6 +244,11 @@ export const DEFAULT_PROVIDER_BASE_URLS: Record<string, string> = {
   "searxng-search": "http://localhost:8888/search",
   petals: "https://chat.petals.dev/api/v1/generate",
   comfyui: "http://localhost:8188",
+  // #7447 — default stays the international host so existing/new
+  // international Kimi/Moonshot users see the same prefilled value as
+  // before; a CN-region user overrides it (see placeholder hint below).
+  kimi: "https://api.moonshot.ai/v1",
+  moonshot: "https://api.moonshot.ai/v1",
 };
 
 export function getLocalProviderMetadata(providerId?: string | null) {
@@ -328,6 +342,11 @@ export function getProviderBaseUrlPlaceholder(providerId?: string | null) {
       return "https://example-account.snowflakecomputing.com";
     case "searxng-search":
       return "http://localhost:8888/search";
+    case "kimi":
+    case "moonshot":
+      // #7447 — surfaces the CN-region alternative host as the placeholder
+      // example (mirrors the siliconflow.com/siliconflow.cn pattern above).
+      return "https://api.moonshot.cn/v1";
     default:
       return "";
   }
@@ -340,7 +359,6 @@ export function isGlmProvider(providerId?: string | null) {
 // ---------------------------------------------------------------------------
 // Routing-tags / excluded-models parse + format
 // ---------------------------------------------------------------------------
-
 
 // parseRoutingTagsInput / parseExcludedModelsInput moved to the pure leaf
 // providerInputParsers.ts (kept re-exported here for existing UI importers).

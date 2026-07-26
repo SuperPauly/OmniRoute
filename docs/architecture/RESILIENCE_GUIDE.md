@@ -209,10 +209,12 @@ on). Without a `max_concurrent` cap the behavior is unchanged.
 
 ### Combo cooldown-aware retry
 
-For quota-share combos only, a request that would crystallize a 429 for a SHORT
-transient cooldown waits it out and re-dispatches instead of returning the 429.
-Bounded by `comboCooldownWait` (`enabled`, `maxWaitMs` 5s, `maxAttempts` 2,
-`budgetMs` 8s) in **Settings → Resilience**. It never waits on `quota_exhausted`
+For every combo strategy (when enabled), a request that would crystallize a 429
+for a SHORT transient cooldown waits it out and re-dispatches instead of
+returning the 429 — this covers Gemini-class TPM/RPM windows (~60s retry-after)
+on multi-model combos, e.g. both targets of a 2-model combo hitting a per-model
+rate limit. Bounded by `comboCooldownWait` (`enabled`, `maxWaitMs`, `maxAttempts`,
+`budgetMs`) in **Settings → Resilience**. It never waits on `quota_exhausted`
 (locked until midnight) or auth/not-found reasons.
 
 ---

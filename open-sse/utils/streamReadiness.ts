@@ -81,11 +81,40 @@ function getPayloadType(payload: unknown, eventType = ""): string {
   return typeof type === "string" ? type : eventType;
 }
 
+// Keys that indicate a frame carries (or is starting to carry) actual model
+// output — as opposed to a bare `{error:{...}}` frame with no output signal
+// at all. A stream that only ever emits error-only frames (e.g. a CLI
+// passthrough executor's mid-stream spawn failure, #7503) must NOT be
+// classified as "ready" — treating it as ready lets the malformed frame
+// reach the client as a fake 200 success and blocks combo fallback to the
+// next candidate.
+const CONTENT_BEARING_KEYS = [
+  "choices",
+  "candidates",
+  "content_block",
+  "delta",
+  "output",
+  "response",
+  "parts",
+  "tool_calls",
+  "tool_use",
+  "function_call",
+  "function_call_output",
+];
+
+function isErrorOnlyStructuredPayload(payload: Record<string, unknown>): boolean {
+  if (!("error" in payload)) return false;
+  return !CONTENT_BEARING_KEYS.some((key) => key in payload);
+}
+
 function hasNonPingStructuredPayload(payload: unknown, eventType = ""): boolean {
   const type = getPayloadType(payload, eventType);
   if (isPingEventType(eventType) || isPingEventType(type)) return false;
   if (Array.isArray(payload)) return payload.length > 0;
-  if (isRecord(payload)) return Object.keys(payload).length > 0;
+  if (isRecord(payload)) {
+    if (Object.keys(payload).length === 0) return false;
+    return !isErrorOnlyStructuredPayload(payload);
+  }
   return payload !== null && payload !== undefined;
 }
 

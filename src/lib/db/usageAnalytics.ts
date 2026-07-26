@@ -49,14 +49,14 @@ export function getUsageSummary(unifiedSource: string, params: AnalyticsParams):
     .prepare(
       `
       SELECT
-        COUNT(*) as totalRequests,
+        COALESCE(SUM(requests), 0) as totalRequests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
         COUNT(DISTINCT model) as uniqueModels,
         COUNT(DISTINCT COALESCE(NULLIF(account_key, ''), NULLIF(connection_id, ''))) as uniqueAccounts,
         COUNT(DISTINCT COALESCE(NULLIF(api_key_id, ''), NULLIF(api_key_name, ''))) as uniqueApiKeys,
-        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests,
+        COALESCE(SUM(CASE WHEN success = 1 THEN requests ELSE 0 END), 0) as successfulRequests,
         COALESCE(AVG(latency_ms), 0) as avgLatencyMs,
         COALESCE(MIN(timestamp), '') as firstRequest,
         COALESCE(MAX(timestamp), '') as lastRequest
@@ -101,7 +101,7 @@ export function getDailyUsage(unifiedSource: string, params: AnalyticsParams): D
       `
       SELECT
         DATE(timestamp) as date,
-        COUNT(*) as requests,
+        COALESCE(SUM(requests), 0) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
@@ -215,7 +215,7 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         LOWER(model) as model,
         LOWER(provider) as provider,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
-        COUNT(*) as requests,
+        COALESCE(SUM(requests), 0) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
@@ -223,7 +223,7 @@ export function getModelUsageRows(unifiedSource: string, params: AnalyticsParams
         COALESCE(SUM(tokens_reasoning), 0) as reasoningTokens,
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
         COALESCE(AVG(latency_ms), 0) as avgLatencyMs,
-        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests,
+        COALESCE(SUM(CASE WHEN success = 1 THEN requests ELSE 0 END), 0) as successfulRequests,
         COALESCE(MAX(timestamp), '') as lastUsed
       FROM ${unifiedSource} AS _u
       GROUP BY LOWER(model), LOWER(provider), serviceTier
@@ -298,12 +298,12 @@ export function getProviderUsageRows(
       `
       SELECT
         LOWER(provider) as provider,
-        COUNT(*) as requests,
+        COALESCE(SUM(requests), 0) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens,
         COALESCE(AVG(latency_ms), 0) as avgLatencyMs,
-        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successfulRequests
+        COALESCE(SUM(CASE WHEN success = 1 THEN requests ELSE 0 END), 0) as successfulRequests
       FROM ${unifiedSource} AS _u
       GROUP BY LOWER(provider)
       ORDER BY requests DESC
@@ -342,7 +342,7 @@ export function getAccountCostRows(whereClause: string, params: AnalyticsParams)
         SELECT
           COALESCE(
             NULLIF(usage_history.account_key, ''),
-            'connection:' || COALESCE(LOWER(usage_history.provider), 'unknown') || ':' || COALESCE(usage_history.connection_id, 'unknown')
+            'connection:' || COALESCE(LOWER(usage_history.provider), 'unknown') || ':' || COALESCE(NULLIF(TRIM(usage_history.connection_id), ''), 'unknown')
           ) as resolved_account_key,
           usage_history.provider,
           usage_history.model,
@@ -403,7 +403,7 @@ export function getAccountUsageRows(
       WITH account_events AS (
         SELECT
           usage_history.*,
-          COALESCE(NULLIF(usage_history.account_key, ''), 'connection:' || COALESCE(LOWER(usage_history.provider), 'unknown') || ':' || COALESCE(usage_history.connection_id, 'unknown')) as resolved_account_key
+          COALESCE(NULLIF(usage_history.account_key, ''), 'connection:' || COALESCE(LOWER(usage_history.provider), 'unknown') || ':' || COALESCE(NULLIF(TRIM(usage_history.connection_id), ''), 'unknown')) as resolved_account_key
         FROM usage_history
         ${whereClause}
       ),
@@ -416,10 +416,10 @@ export function getAccountUsageRows(
         SELECT
           stable_account_keys.account_key,
           (
-            SELECT usage_history.account_label
+            SELECT TRIM(usage_history.account_label)
             FROM usage_history
             WHERE usage_history.account_key = stable_account_keys.account_key
-              AND NULLIF(usage_history.account_label, '') IS NOT NULL
+              AND NULLIF(TRIM(usage_history.account_label), '') IS NOT NULL
             ORDER BY COALESCE(usage_history.account_label_priority, 0) DESC,
                      usage_history.timestamp DESC,
                      usage_history.id DESC
@@ -432,7 +432,7 @@ export function getAccountUsageRows(
         FROM (
           SELECT
             account_events.resolved_account_key as account_key,
-            account_events.account_label,
+            TRIM(account_events.account_label) as account_label,
             ROW_NUMBER() OVER (
               PARTITION BY account_events.resolved_account_key
               ORDER BY COALESCE(account_events.account_label_priority, 0) DESC,
@@ -441,7 +441,7 @@ export function getAccountUsageRows(
             ) as label_rank
           FROM account_events
           WHERE (account_events.account_key IS NULL OR account_events.account_key = '')
-            AND NULLIF(account_events.account_label, '') IS NOT NULL
+            AND NULLIF(TRIM(account_events.account_label), '') IS NOT NULL
         )
         WHERE label_rank = 1
       ),
@@ -452,7 +452,7 @@ export function getAccountUsageRows(
       )
       SELECT
         account_events.resolved_account_key as accountKey,
-        COALESCE(selected_labels.account_label, account_events.connection_id, 'unknown') as account,
+        COALESCE(NULLIF(TRIM(selected_labels.account_label), ''), NULLIF(TRIM(account_events.connection_id), ''), 'unknown') as account,
         COUNT(account_events.id) as requests,
         COALESCE(SUM(account_events.tokens_input), 0) as promptTokens,
         COALESCE(SUM(account_events.tokens_output), 0) as completionTokens,
@@ -553,7 +553,7 @@ export function getServiceTierUsageRows(
         LOWER(provider) as provider,
         LOWER(model) as model,
         COALESCE(NULLIF(service_tier, ''), 'standard') as serviceTier,
-        COUNT(*) as requests,
+        COALESCE(SUM(requests), 0) as requests,
         COALESCE(SUM(tokens_input), 0) as promptTokens,
         COALESCE(SUM(tokens_output), 0) as completionTokens,
         COALESCE(SUM(tokens_cache_read), 0) as cacheReadTokens,
@@ -633,7 +633,7 @@ export function getWeeklyPatternRows(
         SELECT
           DATE(timestamp) as date,
           strftime('%w', timestamp) as dayOfWeek,
-          COUNT(*) as requests,
+          COALESCE(SUM(requests), 0) as requests,
           COALESCE(SUM(tokens_input + tokens_output), 0) as totalTokens
         FROM ${unifiedSource} AS _u
         GROUP BY DATE(timestamp), strftime('%w', timestamp)

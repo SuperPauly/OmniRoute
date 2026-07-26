@@ -441,6 +441,17 @@ export const USAGE_SUPPORTED_PROVIDERS = [
   "vertex",
   "vertex-partner",
   "codebuddy-cn",
+  // PromptQL playground credits (getCreditSummary → USD micros)
+  "promptql",
+  "pql",
+  // Adobe Firefly web (cookie/JWT as apikey) — GET firefly.adobe.io/v1/credits/balance
+  "adobe-firefly",
+  "firefly",
+  "hyperagent",
+  "ha",
+  // xAI OAuth (Grok) weekly quota (id + public alias, same pattern as ha/agy)
+  "xai-oauth",
+  "xao",
 ];
 
 // ── Zod validation at module load (Phase 7.2) ──

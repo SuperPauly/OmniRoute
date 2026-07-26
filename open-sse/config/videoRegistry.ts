@@ -27,6 +27,36 @@ interface VideoProvider {
 }
 
 export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
+  "qwen-cloud-token-plan": {
+    id: "qwen-cloud-token-plan",
+    alias: "qct",
+    baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/api/v1",
+    statusUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/api/v1/tasks",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "dashscope-video",
+    models: [
+      { id: "happyhorse-1.1-i2v", name: "HappyHorse 1.1 I2V" },
+      { id: "happyhorse-1.1-t2v", name: "HappyHorse 1.1 T2V" },
+      { id: "happyhorse-1.1-r2v", name: "HappyHorse 1.1 R2V" },
+    ],
+  },
+
+  "bailian-coding-plan": {
+    id: "bailian-coding-plan",
+    alias: "bcp",
+    baseUrl: "https://coding-intl.dashscope.aliyuncs.com/api/v1",
+    statusUrl: "https://coding-intl.dashscope.aliyuncs.com/api/v1/tasks",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "dashscope-video",
+    models: [
+      { id: "happyhorse-1.1-i2v", name: "HappyHorse 1.1 I2V" },
+      { id: "happyhorse-1.1-t2v", name: "HappyHorse 1.1 T2V" },
+      { id: "happyhorse-1.1-r2v", name: "HappyHorse 1.1 R2V" },
+    ],
+  },
+
   vertex: {
     id: "vertex",
     baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
@@ -221,7 +251,37 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "dashscope-video",
-    models: [{ id: "wan2.7-t2v", name: "Wan 2.7 T2V" }],
+    models: [
+      { id: "happyhorse-1.1-i2v", name: "HappyHorse 1.1 I2V" },
+      { id: "happyhorse-1.1-t2v", name: "HappyHorse 1.1 T2V" },
+      { id: "happyhorse-1.1-r2v", name: "HappyHorse 1.1 R2V" },
+      { id: "happyhorse-1.0-video-edit", name: "HappyHorse 1.0 Video Edit" },
+      { id: "wan2.7-i2v-2026-04-25", name: "Wan 2.7 I2V (2026-04-25)" },
+      { id: "wan2.6-i2v-flash", name: "Wan 2.6 I2V Flash" },
+      { id: "wan2.7-t2v-2026-06-12", name: "Wan 2.7 T2V (2026-06-12)" },
+      { id: "wan2.7-r2v-2026-06-12", name: "Wan 2.7 R2V (2026-06-12)" },
+      { id: "wan2.7-videoedit", name: "Wan 2.7 Video Edit" },
+    ],
+  },
+
+  "qwen-cloud": {
+    id: "qwen-cloud",
+    alias: "qwc",
+    baseUrl: "https://dashscope-intl.aliyuncs.com/api/v1",
+    statusUrl: "https://dashscope-intl.aliyuncs.com/api/v1/tasks",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "dashscope-video",
+    models: [
+      { id: "happyhorse-1.1-i2v", name: "HappyHorse 1.1 I2V" },
+      { id: "happyhorse-1.1-t2v", name: "HappyHorse 1.1 T2V" },
+      { id: "happyhorse-1.1-r2v", name: "HappyHorse 1.1 R2V" },
+      { id: "happyhorse-1.0-video-edit", name: "HappyHorse 1.0 Video Edit" },
+      { id: "wan2.7-t2v", name: "Wan 2.7 T2V" },
+      { id: "wan2.7-i2v", name: "Wan 2.7 I2V" },
+      { id: "wan2.7-r2v-2026-06-12", name: "Wan 2.7 R2V (2026-06-12)" },
+      { id: "wan2.7-videoedit", name: "Wan 2.7 Video Edit" },
+    ],
   },
 
   // Segmind video generation (#6656). Same `POST /v1/{model}` REST shape as
@@ -263,6 +323,30 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authHeader: "bearer",
     format: "xai-video",
     models: [{ id: "grok-imagine-video", name: "Grok Imagine Video" }],
+  },
+
+  // Adobe Firefly (unofficial) — same IMS/cookie credential as the image entry.
+  // Async 3P video generate + poll (Sora 2, Veo 3.1, Kling …). Fallback list
+  // from models/discovery capture (adobe/get_models.txt).
+  "adobe-firefly": {
+    id: "adobe-firefly",
+    alias: "firefly",
+    baseUrl: "https://firefly-3p.ff.adobe.io/v2/3p-videos/generate-async",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "adobe-firefly-video",
+    models: [
+      { id: "sora-2", name: "Firefly Sora 2" },
+      { id: "sora-2-pro", name: "Firefly Sora 2 Pro" },
+      { id: "veo-3.1", name: "Firefly Veo 3.1" },
+      { id: "veo-3.1-fast", name: "Firefly Veo 3.1 Fast" },
+      { id: "veo-3.1-ref", name: "Firefly Veo 3.1 Reference" },
+      { id: "kling-3", name: "Firefly Kling v3 Standard I2V" },
+      { id: "kling-v3-t2v", name: "Firefly Kling v3 Standard T2V" },
+      { id: "kling-v3-pro-i2v", name: "Firefly Kling v3 Pro I2V" },
+      { id: "luma-ray3", name: "Firefly Ray3" },
+      { id: "runway-gen4-turbo", name: "Firefly Runway Gen-4 Video" },
+    ],
   },
 };
 

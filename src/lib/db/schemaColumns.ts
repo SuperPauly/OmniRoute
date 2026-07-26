@@ -87,6 +87,9 @@ export function ensureProviderConnectionsColumns(db: SqliteDatabase) {
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_pc_auth_active_refresh ON provider_connections(auth_type, is_active, refresh_token)"
     );
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_pc_provider_auth_type ON provider_connections(provider, auth_type)"
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn("[DB] Failed to verify provider_connections schema:", message);
@@ -147,6 +150,20 @@ export function ensureUsageHistoryColumns(db: SqliteDatabase) {
       db.exec("ALTER TABLE usage_history ADD COLUMN account_label_priority INTEGER DEFAULT 0");
       console.log("[DB] Added usage_history.account_label_priority column");
     }
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_uh_provider_model_timestamp ON usage_history(provider, model, timestamp)"
+    );
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_uh_dedup ON usage_history(
+        timestamp,
+        COALESCE(provider, ''),
+        COALESCE(model, ''),
+        COALESCE(connection_id, ''),
+        COALESCE(api_key_id, ''),
+        tokens_input,
+        tokens_output
+      )`
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn("[DB] Failed to verify usage_history schema:", message);
@@ -236,6 +253,10 @@ export function ensureCallLogsColumns(db: SqliteDatabase) {
       db.exec("ALTER TABLE call_logs ADD COLUMN model_pinned INTEGER DEFAULT 0");
       console.log("[DB] Added call_logs.model_pinned column");
     }
+    if (!columnNames.has("session_tag")) {
+      db.exec("ALTER TABLE call_logs ADD COLUMN session_tag TEXT DEFAULT NULL");
+      console.log("[DB] Added call_logs.session_tag column");
+    }
 
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_call_logs_requested_model ON call_logs(requested_model)"
@@ -245,6 +266,7 @@ export function ensureCallLogsColumns(db: SqliteDatabase) {
       "CREATE INDEX IF NOT EXISTS idx_cl_combo_target ON call_logs(combo_name, combo_execution_key, timestamp)"
     );
     db.exec("CREATE INDEX IF NOT EXISTS idx_cl_correlation_id ON call_logs(correlation_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cl_session_tag ON call_logs(session_tag)");
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn("[DB] Failed to verify call_logs schema:", message);

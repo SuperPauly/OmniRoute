@@ -11,7 +11,7 @@ import { getProviderCategory, getRegistryEntry } from "../config/providerRegistr
 // NOT a silent "fake success" failure. Used to avoid rewriting a valid HTTP 200
 // (e.g. a Claude Code `max_tokens: 1` connectivity ping) into a synthetic 502.
 const LEGIT_EMPTY_CLAUDE_STOP = new Set(["max_tokens", "tool_use"]);
-const LEGIT_EMPTY_OPENAI_FINISH = new Set(["length", "tool_calls"]);
+const LEGIT_EMPTY_OPENAI_FINISH = new Set(["length", "tool_calls", "content_filter"]);
 
 export function isEmptyContentResponse(responseBody: unknown): boolean {
   if (!responseBody || typeof responseBody !== "object") return false;
@@ -232,8 +232,18 @@ export function classifyProviderError(
   }
   if (statusCode >= 500) return PROVIDER_ERROR_TYPES.SERVER_ERROR;
 
-  if (statusCode === 400 && isContextOverflow(bodyStr)) {
-    return PROVIDER_ERROR_TYPES.CONTEXT_OVERFLOW;
+  if (statusCode === 400) {
+    if (isContextOverflow(bodyStr)) {
+      return PROVIDER_ERROR_TYPES.CONTEXT_OVERFLOW;
+    }
+    // Some providers (e.g. Antigravity's Pro-fallback chain, #8136) return a
+    // plain 400 for a model that is no longer available, instead of 404/401.
+    // Without this check the error falls through to `return null`, so
+    // lockModel() never fires and the same dead model gets retried on every
+    // request. Detect the phrasing here, same as the 401 branch above (#7268).
+    if (containsModelUnavailableMessage(bodyStr)) {
+      return PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND;
+    }
   }
 
   return null;

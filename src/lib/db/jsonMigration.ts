@@ -13,6 +13,8 @@
 
 import type { SqliteAdapter } from "./adapters/types";
 import { normalizeRoutingStrategy } from "@/shared/constants/routingStrategies";
+import { normalizeComboRecord } from "@/lib/combos/steps";
+import { validateComboInvariant } from "@/lib/combos/invariants";
 import {
   resolveImportedUsageAccountIdentity,
   resolveOrphanedUsageAccountIdentity,
@@ -198,12 +200,13 @@ export function runJsonMigration(
           (config as Record<string, unknown>).strategy
         );
       }
-      const normalizedCombo: Record<string, unknown> = {
+      const normalizedCombo: Record<string, unknown> = normalizeComboRecord({
         ...combo,
         strategy: normalizeRoutingStrategy(combo.strategy),
         config,
         sortOrder: typeof combo.sortOrder === "number" ? combo.sortOrder : index + 1,
-      };
+      });
+      validateComboInvariant(normalizedCombo);
       insertCombo.run({
         id: normalizedCombo.id,
         name: normalizedCombo.name,
@@ -245,16 +248,17 @@ export function runJsonMigration(
         )
       `);
       for (const row of data.usageHistory) {
-        const connection = importedConnections.get(row.connection_id);
+        const connectionId = row.connection_id ?? row.connectionId ?? null;
+        const connection = connectionId ? importedConnections.get(connectionId) : undefined;
         const fallbackIdentity = connection
           ? resolveUsageAccountIdentity(connection)
-          : resolveOrphanedUsageAccountIdentity(row.provider, row.connection_id);
+          : resolveOrphanedUsageAccountIdentity(row.provider, connectionId);
         const identity = resolveImportedUsageAccountIdentity(row, fallbackIdentity);
         insertUsageHistory.run({
           id: row.id,
           provider: row.provider ?? null,
           model: row.model ?? null,
-          connection_id: row.connection_id ?? null,
+          connection_id: connectionId,
           account_key: identity.accountKey,
           account_label: identity.accountLabel,
           account_label_priority: identity.accountLabelPriority,

@@ -24,6 +24,7 @@ import { buildAuthHeaders } from "../config/registryUtils.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexTranscribe } from "../executors/vertexMedia.ts";
 import { errorResponse } from "../utils/error.ts";
+import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
 
 type TranscriptionCredentials = {
   apiKey?: string;
@@ -33,7 +34,7 @@ type TranscriptionCredentials = {
 /**
  * Return a CORS error response from an upstream fetch failure
  */
-function upstreamErrorResponse(res, errText) {
+export function upstreamErrorResponse(res, errText) {
   // Always return JSON so the client can parse the error reliably
   let errorMessage: string;
   try {
@@ -71,11 +72,16 @@ function getUploadedFileName(file: Blob & { name?: unknown }): string {
   return typeof file.name === "string" && file.name.length > 0 ? file.name : "audio.wav";
 }
 
+/**
+ * `body` is `Uint8Array<ArrayBuffer>`, not bare `Uint8Array`: `new Uint8Array(n)`
+ * is always ArrayBuffer-backed, and only that narrower form satisfies `BodyInit`
+ * (the bare type widens to `ArrayBufferLike`, which admits `SharedArrayBuffer`).
+ */
 export async function buildMultipartBody(
   file: Blob & { name?: unknown },
   fields: Record<string, string>,
   fileFieldName = "file"
-): Promise<{ body: Uint8Array; contentType: string }> {
+): Promise<{ body: Uint8Array<ArrayBuffer>; contentType: string }> {
   const boundary = "----OmniRouteAudioBoundary" + Date.now().toString(36);
   const parts: Uint8Array[] = [];
   const encoder = new TextEncoder();
@@ -671,7 +677,7 @@ export async function handleAudioTranscription({
   if (!providerConfig) {
     return errorResponse(
       400,
-      `No transcription provider found for model "${model}". Available: openai, groq, deepgram, assemblyai, nvidia, huggingface, qwen, gladia, rev-ai, speechmatics`
+      `No transcription provider found for model "${model}". Available: openai, openrouter, groq, deepgram, assemblyai, nvidia, huggingface, qwen, gladia, rev-ai, speechmatics`
     );
   }
 
@@ -739,6 +745,10 @@ export async function handleAudioTranscription({
 
   if (providerConfig.format === "speechmatics") {
     return handleSpeechmaticsTranscription(providerConfig, file, modelId, token);
+  }
+
+  if (providerConfig.format === "openrouter-stt") {
+    return handleOpenRouterTranscription(providerConfig, file, modelId, token, formData);
   }
 
   // Default: OpenAI/Groq/Qwen3-compatible multipart proxy

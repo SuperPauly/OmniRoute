@@ -8,6 +8,7 @@ import {
   getCachedProviderNodes,
   getModelIsHidden,
   getModelAliases,
+  getDatabaseSettings,
 } from "@/lib/localDb";
 import { createLazyConnectionView } from "@/lib/db/providers/lazyConnectionView";
 import { extractAliasBackedModels } from "./aliasBackedModels";
@@ -118,7 +119,7 @@ type CachedCatalog = {
   status: number;
   expiresAt: number;
 };
-const CATALOG_CACHE_TTL_MS = 1500; // ~one request-latency window; safe vs SDK bursts
+const CATALOG_CACHE_TTL_MS_DEFAULT = 1500; // fallback; overridden by settings
 const catalogCache = new Map<string, CachedCatalog>();
 const catalogInFlight = new Map<string, Promise<CachedCatalog>>();
 
@@ -141,7 +142,8 @@ function buildCatalogCacheKey(request: Request): string {
   const prefix = url.searchParams.get("prefix") || "";
   const apiKey = extractApiKey(request) || "";
   const isCodex = isCodexModelCatalogClient(request) ? "1" : "0";
-  return `${prefix}|${isCodex}|${apiKey}`;
+  const configuredOnly = url.searchParams.get("configuredOnly") === "true" ? "1" : "0";
+  return `${prefix}|${isCodex}|${apiKey}|${configuredOnly}`;
 }
 
 // Tracks the model-catalog cache version (src/lib/db/readCache.ts) as of the last
@@ -219,7 +221,6 @@ export async function getUnifiedModelsResponse(
       headers: mergeCatalogHeaders(corsHeaders, cached.headers, diagnosticHeaders),
     });
   }
-
   let inflight = catalogInFlight.get(cacheKey);
   if (!inflight) {
     inflight = buildCatalogPayload(request).then((payload) => {
@@ -227,7 +228,7 @@ export async function getUnifiedModelsResponse(
         body: payload.body,
         headers: payload.headers,
         status: payload.status,
-        expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
+        expiresAt: Date.now() + payload.cacheTTL,
       });
       return payload;
     });
@@ -259,7 +260,7 @@ export async function getUnifiedModelsResponse(
 
 async function buildCatalogPayload(
   request: Request
-): Promise<{ body: string; headers: Record<string, string>; status: number }> {
+): Promise<{ body: string; headers: Record<string, string>; status: number; cacheTTL: number }> {
   _catalogBuilderRuns++;
   const built = await buildUnifiedModelsResponseCore(request);
   const body = await built.text();
@@ -267,13 +268,16 @@ async function buildCatalogPayload(
   built.headers.forEach((value, key) => {
     headers[key] = value;
   });
-  // buildUnifiedModelsResponseCore() itself returns a real error Response (status 500)
-  // when the builder crashes (e.g. a DB read throws) instead of throwing — status must
-  // be captured and replayed through the cache/coalescing wrapper above, otherwise the
-  // caller-facing Response (built with a fresh `new Response(...)`, defaulting to 200)
-  // silently downgrades a genuine server error into an HTTP 200 with an `error`-shaped
-  // JSON body.
-  return { body, headers, status: built.status };
+  // Read the configurable cache TTL from database settings.
+  // Falls back to the hardcoded default if not set or on error.
+  let cacheTTL = CATALOG_CACHE_TTL_MS_DEFAULT;
+  try {
+    const dbSettings = await getDatabaseSettings();
+    cacheTTL = dbSettings.cache?.modelCatalogCacheTtlMs ?? CATALOG_CACHE_TTL_MS_DEFAULT;
+  } catch {
+    // Swallow — use default TTL on DB error
+  }
+  return { body, headers, status: built.status, cacheTTL };
 }
 
 /**
@@ -352,6 +356,18 @@ async function buildUnifiedModelsResponseCore(
         nodeIdToProviderType[node.id] = node.type;
       }
     }
+
+    // #8327: `resolveCanonicalProviderId`/`canonicalProviderId` only know the static
+    // AI_PROVIDERS/PROVIDER_MODELS alias maps, so a compatible-provider node (whose raw
+    // `id` is an internal UUID, never present in those static maps) falls through every
+    // lookup and returns the raw UUID verbatim. That UUID is still required for the
+    // internal registry/connection/hidden-model lookups that key off `canonicalProviderId`
+    // (getConnectionsForProvider, getModelIsHidden, etc. are keyed by the raw node id, not
+    // the prefix) — so `canonicalProviderId` itself must stay untouched. What must NOT leak
+    // is the raw UUID in the *public* `owned_by` field: resolve it to the operator's
+    // configured prefix there, and only there.
+    const resolvePublicOwnerId = (providerId: string, canonicalProviderId: string): string =>
+      providerIdToPrefix[providerId] || canonicalProviderId;
 
     // Get combos
     let combos = [];
@@ -886,7 +902,7 @@ async function buildUnifiedModelsResponseCore(
               id: aliasId,
               object: "model",
               created: timestamp,
-              owned_by: canonicalProviderId,
+              owned_by: resolvePublicOwnerId(providerId, canonicalProviderId),
               permission: [],
               root: sm.id,
               parent: null,
@@ -898,7 +914,7 @@ async function buildUnifiedModelsResponseCore(
               id: aliasId,
               object: "model",
               created: timestamp,
-              owned_by: canonicalProviderId,
+              owned_by: resolvePublicOwnerId(providerId, canonicalProviderId),
               permission: [],
               root: sm.id,
               parent: null,
@@ -921,7 +937,7 @@ async function buildUnifiedModelsResponseCore(
                 id: providerPrefixedId,
                 object: "model",
                 created: timestamp,
-                owned_by: canonicalProviderId,
+                owned_by: resolvePublicOwnerId(providerId, canonicalProviderId),
                 permission: [],
                 root: sm.id,
                 parent: includeAlias ? aliasId : null,
@@ -1041,7 +1057,9 @@ async function buildUnifiedModelsResponseCore(
     // Add embedding models (filtered by active providers)
     for (const embModel of getAllEmbeddingModels()) {
       if (!isProviderActive(embModel.provider)) continue;
-      const rawModelId = embModel.id.split("/").pop() || embModel.id;
+      const rawModelId = embModel.id.startsWith(`${embModel.provider}/`)
+        ? embModel.id.slice(embModel.provider.length + 1)
+        : embModel.id;
       if (!providerSupportsModel(embModel.provider, rawModelId)) continue;
       if (getModelIsHidden(embModel.provider, rawModelId)) continue;
       if (hasEquivalentSpecialtyModel(embModel.provider, rawModelId, "embedding", embModel.id)) {
@@ -1241,7 +1259,7 @@ async function buildUnifiedModelsResponseCore(
               id: aliasId,
               object: "model",
               created: timestamp,
-              owned_by: canonicalProviderId,
+              owned_by: resolvePublicOwnerId(providerId, canonicalProviderId),
               permission: [],
               root: modelId,
               parent: null,
@@ -1272,7 +1290,7 @@ async function buildUnifiedModelsResponseCore(
               id: providerPrefixedId,
               object: "model",
               created: timestamp,
-              owned_by: canonicalProviderId,
+              owned_by: resolvePublicOwnerId(providerId, canonicalProviderId),
               permission: [],
               root: modelId,
               parent: includeAlias ? aliasId : null,
@@ -1346,7 +1364,7 @@ async function buildUnifiedModelsResponseCore(
             id: aliasId,
             object: "model",
             created: timestamp,
-            owned_by: canonicalProviderId,
+            owned_by: resolvePublicOwnerId(providerKey, canonicalProviderId),
             permission: [],
             root: modelId,
             parent: null,
@@ -1367,7 +1385,7 @@ async function buildUnifiedModelsResponseCore(
             id: providerPrefixedId,
             object: "model",
             created: timestamp,
-            owned_by: canonicalProviderId,
+            owned_by: resolvePublicOwnerId(providerKey, canonicalProviderId),
             permission: [],
             root: modelId,
             parent: includeAlias ? aliasId : null,
@@ -1415,7 +1433,7 @@ async function buildUnifiedModelsResponseCore(
           id: aliasId,
           object: "model",
           created: timestamp,
-          owned_by: providerId,
+          owned_by: resolvePublicOwnerId(providerId, canonicalProviderId),
           permission: [],
           root: modelId,
           parent: null,
@@ -1465,6 +1483,15 @@ async function buildUnifiedModelsResponseCore(
         }
         finalModels = filtered;
       }
+    }
+    // ?configuredOnly — hide models that have no eligible DB connection.
+    // Applied after the API-key filter so the key filter runs first, then
+    // variants are only generated for surviving models.
+    if (new URL(request.url).searchParams.get("configuredOnly") === "true") {
+      finalModels = finalModels.filter((m) => {
+        if (!m.root) return true;
+        return hasEligibleConnectionForModel(connections, m.root);
+      });
     }
 
     // Advertise Claude reasoning-effort variants (claude/<model>-{low,medium,high[,xhigh]}).

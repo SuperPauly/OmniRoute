@@ -20,7 +20,8 @@ import { randomUUID } from "node:crypto";
 let clientPromise: Promise<unknown> | null = null;
 let exitHookInstalled = false;
 
-const CLAUDE_PROFILE = "chrome_146"; // closest supported wreq-js profile (chrome_149 absent in 2.3.1, #5591)
+export const CLAUDE_TLS_BROWSER_MAJOR_VERSION = "146";
+const CLAUDE_PROFILE = `chrome_${CLAUDE_TLS_BROWSER_MAJOR_VERSION}`;
 const DEFAULT_TIMEOUT_MS =
   Number.parseInt(process.env.OMNIROUTE_CLAUDE_TLS_TIMEOUT_MS || "", 10) || 60_000;
 // Grace period added to the binding's wire-level timeout before our JS-level
@@ -246,7 +247,7 @@ export function __setTlsFetchOverrideForTesting(fn: typeof testOverride): void {
 }
 
 /**
- * Make a single HTTP request to claude.ai with a Firefox-like TLS fingerprint.
+ * Make a single HTTP request to claude.ai with the configured Chrome TLS profile.
  *
  * Throws TlsClientUnavailableError if the native binary failed to load.
  */
@@ -404,7 +405,12 @@ export async function tlsFetchStreaming(
   // that race; if the request actually fails before producing any bytes,
   // the timeout falls through to the requestPromise drain below (returning
   // the real upstream status).
-  const ready = await waitForContent(path, 5_000, requestPromise);
+  // Do not impose a second, shorter first-byte timeout here. Opus-class
+  // models can legitimately take more than five seconds before emitting the
+  // first SSE event. `requestPromise` is already guarded by the configured
+  // wire timeout plus the JS hard-timeout grace, so waiting until either the
+  // file has data or that promise settles remains bounded.
+  const ready = await waitForContent(path, requestPromise);
   if (!ready) {
     const r = await requestPromise.catch(
       (e) => ({ status: 502, headers: {}, body: String(e) }) as TlsResponseLike
@@ -500,7 +506,6 @@ async function readFirstBytes(path: string, n: number): Promise<string> {
  */
 async function waitForContent(
   path: string,
-  timeoutMs: number,
   requestPromise: Promise<TlsResponseLike>
 ): Promise<boolean> {
   let requestSettled = false;
@@ -512,8 +517,7 @@ async function waitForContent(
       requestSettled = true;
     }
   );
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  while (true) {
     try {
       const s = await stat(path);
       if (s.size > 0) return true;
@@ -525,7 +529,6 @@ async function waitForContent(
     if (requestSettled) return false;
     await sleep(25);
   }
-  return false;
 }
 
 function tailFile(

@@ -1,0 +1,1 @@
+- **fix(backend):** capability filters fail closed when every combo target is incompatible, with opt-in `compatFilterFailOpen` ([#8488](https://github.com/diegosouzapw/OmniRoute/issues/8488)) — thanks @Prudhvivuda

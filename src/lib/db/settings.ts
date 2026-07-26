@@ -103,7 +103,9 @@ function withFamilyDefault(value: ProxyValue): ProxyValue {
 function applySessionAffinityLegacyFallback(settings: Record<string, unknown>): void {
   if (settings.sessionAffinityTtlMs === undefined) {
     settings.sessionAffinityTtlMs =
-      typeof settings.codexSessionAffinityTtlMs === "number" ? settings.codexSessionAffinityTtlMs : 0;
+      typeof settings.codexSessionAffinityTtlMs === "number"
+        ? settings.codexSessionAffinityTtlMs
+        : 0;
   }
 }
 
@@ -116,9 +118,16 @@ export async function getSettings() {
     tailscaleUrl: "",
     stickyRoundRobinLimit: 3,
     disableSessionStickiness: false,
+    promptCacheAffinityEnabled: true,
     comboStrategy: "fallback",
     comboStickyRoundRobinLimit: null, // null = inherit stickyRoundRobinLimit (a literal default here shadows the documented batched-rotation default of 3 — #6678 regression caught by the v3.8.47 release CI)
     providerStrategies: {},
+    // Per-operator quota row visibility (dashboard usage tab). Keyed by
+    // provider id → { hidden: [<quota visibility key>] }. Independent of the
+    // model catalog's isHidden/isDeleted flags (collectHiddenQuotaModelIds in
+    // ProviderLimits/utils.tsx) — this is a personal view preference, not an
+    // admin model-catalog edit. Ported from upstream decolua/9router#2371.
+    quotaVisibility: {},
     requestRetry: 3,
     maxRetryIntervalSec: 30,
     antigravitySignatureCacheMode: "enabled",
@@ -156,7 +165,13 @@ export async function getSettings() {
     codexServiceTier: { enabled: false },
     claudeFastMode: {
       enabled: false,
-      supportedModels: ["claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"],
+      supportedModels: [
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+      ],
     },
     // #7274: renamed from codexSessionAffinityTtlMs — session affinity now
     // applies to any provider, not just Codex. No default here on purpose:
@@ -514,8 +529,10 @@ export async function resolveProxyForConnection(
 
   // Step 2: API key-level proxy (only if per-key proxy is enabled globally or per-connection)
   if (apiKeyId) {
-    // Check if per-key proxy is allowed: globally OR per-connection
-    const perKeyEnabled = globalPerKeyProxyEnabled || connectionPerKeyProxyEnabled;
+    // Check if per-key proxy is allowed: the global toggle is a true override —
+    // when it is off, no connection's per-key assignment may apply, regardless
+    // of that connection's own per_key_proxy_enabled flag (#8385).
+    const perKeyEnabled = globalPerKeyProxyEnabled && connectionPerKeyProxyEnabled;
 
     if (perKeyEnabled) {
       try {
@@ -762,3 +779,4 @@ export {
   getCacheTrend,
   resetCacheMetrics,
 } from "./settings/cacheMetrics";
+export { getCachedSettings } from "./readCache";

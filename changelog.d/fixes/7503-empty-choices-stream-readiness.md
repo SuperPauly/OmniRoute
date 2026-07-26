@@ -1,0 +1,1 @@
+- fix(sse): stop stream readiness from treating a choices-less mid-stream error frame as a successful stream, so combo can fail over instead of returning zero `choices` (#7503)

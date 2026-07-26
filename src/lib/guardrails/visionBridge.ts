@@ -19,6 +19,12 @@ import {
   isVisionBridgeForcedModel,
 } from "@/shared/constants/visionBridgeDefaults";
 import { getBestVisionModel } from "./visionBridgeRouter";
+import {
+  isProviderConnectionUsable,
+  hasUsableCredentialsForModel,
+} from "./visionBridgeCredentials";
+
+export { isProviderConnectionUsable, hasUsableCredentialsForModel };
 
 type ComboVisionBridgeDecision = "process" | "skip" | "not-combo";
 
@@ -99,74 +105,6 @@ export interface VisionBridgeDependencies {
   hasUsableCredentials?: (model: string) => Promise<boolean | null>;
 }
 
-/**
- * True when a provider connection can actually authenticate upstream.
- * `noauth` with no real API key is NOT usable (opencode-zen free tier often
- * surfaces as noauth and then 401 "Missing API key").
- */
-type ProviderConnectionLike = {
-  authType?: string | null;
-  apiKey?: string | null;
-  accessToken?: string | null;
-  refreshToken?: string | null;
-  idToken?: string | null;
-  testStatus?: string | null;
-};
-
-const TERMINAL_CONNECTION_STATUSES = new Set(["disabled", "banned", "expired"]);
-// Free/noauth only counts when a real key is still present; apikey/cookie need the same.
-const KEY_ONLY_AUTH_TYPES = new Set(["noauth", "none", "", "apikey", "cookie"]);
-const TOKEN_AUTH_TYPES = new Set(["oauth", "access_token", "external_idp"]);
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function hasOAuthCredential(connection: ProviderConnectionLike): boolean {
-  return (
-    hasNonEmptyString(connection.refreshToken) ||
-    hasNonEmptyString(connection.accessToken) ||
-    hasNonEmptyString(connection.idToken)
-  );
-}
-
-export function isProviderConnectionUsable(connection: ProviderConnectionLike): boolean {
-  const status = String(connection.testStatus || "").toLowerCase();
-  if (TERMINAL_CONNECTION_STATUSES.has(status)) {
-    return false;
-  }
-
-  const auth = String(connection.authType || "").toLowerCase();
-  const hasKey = hasNonEmptyString(connection.apiKey);
-
-  if (KEY_ONLY_AUTH_TYPES.has(auth)) {
-    return hasKey;
-  }
-  if (TOKEN_AUTH_TYPES.has(auth)) {
-    return hasOAuthCredential(connection) || hasKey;
-  }
-  return hasKey;
-}
-
-/**
- * Resolve whether `provider/model` has at least one usable active connection.
- * Returns `null` when the credential store is unavailable (unit tests / early boot).
- */
-export async function hasUsableCredentialsForModel(model: string): Promise<boolean | null> {
-  const provider = typeof model === "string" ? model.split("/")[0]?.trim() : "";
-  if (!provider) return null;
-  try {
-    const { getProviderConnections } = await import("@/lib/db/providers");
-    const connections = await getProviderConnections({ provider, isActive: true });
-    if (!Array.isArray(connections)) return null;
-    // Empty active set is a definitive "no" only when the table is readable.
-    if (connections.length === 0) return false;
-    return connections.some((c: any) => isProviderConnectionUsable(c));
-  } catch {
-    return null;
-  }
-}
-
 export class VisionBridgeGuardrail extends BaseGuardrail {
   name = "vision-bridge";
   priority = 5;
@@ -196,37 +134,48 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
       return { block: false };
     }
 
-    // 3b. Auto/ prefix → skip guardrail (auto-combo resolver handles vision-capable model selection)
-    if (model === "auto" || model.startsWith("auto/")) {
-      return { block: false };
-    }
+    // 3b. Auto/ prefix — don't skip guardrail entirely. Images still need to be
+    // described or rerouted to a vision-capable model. The auto-combo resolver
+    // does NOT currently filter models by vision capability, so without the
+    // guardrail an image-bearing request assigned to a text-only model will
+    // fail upstream with "does not support images".
+    const isAuto = model === "auto" || model.startsWith("auto/");
 
-    const forceVisionBridge = isVisionBridgeForcedModel(model);
+    // Declare before the conditional so they're available to the rest of preCall
+    let forceVisionBridge = false;
+    let comboVisionBridgeDecision: ComboVisionBridgeDecision | undefined;
 
-    // 4. Check if model supports vision
-    const capabilities = getResolvedModelCapabilities(model);
-    const comboVisionBridgeDecision = forceVisionBridge
-      ? "process"
-      : this.deps.checkModelHasComboMapping
-        ? (await this.deps.checkModelHasComboMapping(model))
-          ? "process"
-          : "skip"
-        : await getComboVisionBridgeDecision(model);
+    if (!isAuto) {
+      forceVisionBridge = isVisionBridgeForcedModel(model);
 
-    if (comboVisionBridgeDecision === "skip") {
-      return { block: false };
-    }
+      // 4. Check if model supports vision
+      const capabilities = getResolvedModelCapabilities(model);
+      comboVisionBridgeDecision = forceVisionBridge
+        ? "process"
+        : this.deps.checkModelHasComboMapping
+          ? (await this.deps.checkModelHasComboMapping(model))
+            ? "process"
+            : "skip"
+          : await getComboVisionBridgeDecision(model);
 
-    if (capabilities.supportsVision === true && !forceVisionBridge) {
-      // The request model supports vision natively, but check if a
-      // model-combo mapping routes this model through a combo where
-      // some targets may NOT support vision. In that case, the vision
-      // bridge must process images so combo targets can describe them.
-      if (comboVisionBridgeDecision !== "process") {
+      if (comboVisionBridgeDecision === "skip") {
         return { block: false };
       }
-      // Combo mapping found — fall through to process images
+
+      if (capabilities?.supportsVision === true && !forceVisionBridge) {
+        // The request model supports vision natively, but check if a
+        // model-combo mapping routes this model through a combo where
+        // some targets may NOT support vision. In that case, the vision
+        // bridge must process images so combo targets can describe them.
+        if (comboVisionBridgeDecision !== "process") {
+          return { block: false };
+        }
+        // Combo mapping found — fall through to process images
+      }
     }
+    // For auto models (isAuto=true), force remains false and combo decision
+    // remains undefined, which makes the reroute check on line ~189 treat it
+    // like a non-combo model — exactly what we want: reroute to a vision model.
 
     // 5. Get body and check for messages
     const body = payload as Record<string, unknown>;
@@ -266,12 +215,17 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // exists, which produced: HTTP log zai → Guardrail reroute → opencode-zen 401
     // "Missing API key" while the combo UI still showed body=zai. Fall through to
     // the image-describe path so the user's chosen model still answers.
-    if (comboVisionBridgeDecision === "not-combo" && !forceVisionBridge) {
-      const checkCreds =
-        this.deps.hasUsableCredentials ?? hasUsableCredentialsForModel;
+    //
+    // Reroute also fires for the auto/ prefix (isAuto): the auto-combo resolver
+    // does not filter candidates for vision capability, so an image-bearing
+    // request with model=auto would land on a text-only model (#7871). Keeping
+    // "auto" is never the answer there, so the keep-credentialed-model skip
+    // below does not apply to auto — only the reroute-target credential guard.
+    if ((comboVisionBridgeDecision === "not-combo" || isAuto) && !forceVisionBridge) {
+      const checkCreds = this.deps.hasUsableCredentials ?? hasUsableCredentialsForModel;
       const originalUsable = await checkCreds(model);
 
-      if (originalUsable === true) {
+      if (originalUsable === true && !isAuto) {
         // Keep the credentialed model; describe images below if needed.
         context.log?.debug?.(
           "VISION_BRIDGE",
@@ -287,7 +241,7 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
           typeof settings.visionBridgeModel === "string" && settings.visionBridgeModel.trim()
             ? settings.visionBridgeModel.trim()
             : undefined;
-        const bestModel = getBestVisionModel({ fixedModel: configuredModel });
+        const bestModel = await getBestVisionModel({ fixedModel: configuredModel });
         if (bestModel && bestModel !== model) {
           const bestUsable = await checkCreds(bestModel);
           // Only block the reroute when we KNOW the target is unusable (false).
