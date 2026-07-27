@@ -168,6 +168,10 @@
     "noModelsFound": "No models found",
     "clear": "Clear",
     "done": "Done",
+    "selectAll": "सर्व निवडा",
+    "unselectAll": "निवड रद्द करा",
+    "visibleModels": "दृश्यमान",
+    "selectAllConfirm": "या कॉम्बोमध्ये {count} मॉडेल जोडायचे?",
     "errorOccurred": "Error Occurred",
     "comboDeleted": "Combo Deleted",
     "hide": "Hide",
@@ -933,6 +937,7 @@
   "disabled": "Disabled",
   "featureFlagOmnirouteEmergencyFallbackDescription": "Route budget-exhausted requests to the emergency free fallback provider/model.",
   "featureFlagArenaEloSyncEnabledDescription": "Enable periodic Arena AI leaderboard ELO sync for model intelligence rankings.",
+  "featureFlagExposeCcDiscoveryAliasesDescription": "__MISSING__:Advertise claude/<provider>/<model> mirror ids on /v1/models so Claude Code gateway model discovery lists non-Claude models. Warning: doubles catalog entries for all clients when enabled globally.",
   "sidebar": {
     "home": "Home",
     "dashboard": "Dashboard",
@@ -2940,7 +2945,15 @@
     "copilotPasteInto": "यामध्ये पेस्ट करा:",
     "copilotReloadInstruction": "नंतर VS Code रीलोड करा आणि इनपुट प्रॉम्प्टमध्ये API की सेट करा.",
     "wireApiChatCompletions": "चॅट पूर्णता (/चॅट/पूर्णता)",
-    "wireApiResponses": "प्रतिसाद API (/प्रतिसाद)"
+    "wireApiResponses": "प्रतिसाद API (/प्रतिसाद)",
+    "ccDiscoveryInfoButton": "__MISSING__:How to enable discovery in Claude Code",
+    "ccDiscoveryInfoTooltip": "__MISSING__:Advertise non-Claude models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Doubles catalog entries for all clients when enabled globally.",
+    "ccDiscoveryInfoLink": "__MISSING__:Open Feature Flags",
+    "ccOnboardingTitle": "__MISSING__:settings.json for gateway model discovery",
+    "ccOnboardingCopy": "__MISSING__:Copy",
+    "ccOnboardingCopied": "__MISSING__:Copied",
+    "ccOnboardingKeyPlaceholder": "__MISSING__:<your OmniRoute API key>",
+    "ccOnboardingWindowNote": "__MISSING__:Claude Code assumes a 200K context window for any model id it does not recognize. For a model with a different real window, add CLAUDE_CODE_AUTO_COMPACT_WINDOW just under it so auto-compaction does not fire too early."
   },
   "combos": {
     "title": "Combos",
@@ -5963,7 +5976,19 @@
     "lmarenaWebCookieHint": "arena.ai उघडा, साइन इन करा, नंतर नेटवर्क विनंतीवरून (Network request) संपूर्ण Cookie हेडर कॉपी करा. arena-auth-prod-v1.0 आणि arena-auth-prod-v1.1 (आणि उपस्थित असल्यास पुढील भाग) समाविष्ट करा, शक्यतो cf_clearance सह. केवळ रिकामी arena-auth-prod-v1 कुकी पेस्ट करू नका. पर्यायी: create-evaluation अजूनही 403 परत करत असल्यास providerSpecificData.recaptchaV3Token.",
     "kimiOfficialSupporterBadge": "संस्थापक मित्र",
     "kimiOfficialSupporterTooltip": "Kimi (Moonshot AI) हा OmniRoute चा संस्थापक ओपन सोर्स मित्र आहे",
-    "kimiPartnerLinkNote": "भागीदार लिंक — तुमच्यासाठी कोणत्याही अतिरिक्त खर्चाशिवाय OmniRoute ला सपोर्ट करते"
+    "kimiPartnerLinkNote": "भागीदार लिंक — तुमच्यासाठी कोणत्याही अतिरिक्त खर्चाशिवाय OmniRoute ला सपोर्ट करते",
+    "ccAliasSectionTitle": "__MISSING__:Expose in Claude Code (claude/…)",
+    "ccAliasSectionHint": "__MISSING__:Advertise this provider's models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Off by default — enabling this doubles catalog entries for all clients.",
+    "ccAliasProviderLevelLabel": "__MISSING__:Provider default",
+    "ccAliasModelOverridesLabel": "__MISSING__:Per-model overrides",
+    "ccAliasModelOverrideAriaLabel": "__MISSING__:Override for {modelId}",
+    "ccAliasStateInherit": "__MISSING__:Inherit",
+    "ccAliasStateOn": "__MISSING__:On",
+    "ccAliasStateOff": "__MISSING__:Off",
+    "ccAliasAddModelPlaceholder": "__MISSING__:Model id (e.g. gpt-4o)",
+    "ccAliasAddModelButton": "__MISSING__:Add override",
+    "ccAliasLoadError": "__MISSING__:Failed to load discovery-alias settings: {error}",
+    "ccAliasSaveError": "__MISSING__:Failed to save discovery-alias setting: {error}"
   },
   "settings": {
     "title": "Settings",
@@ -11801,7 +11826,8 @@
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "स्किल्स सँडबॉक्समध्ये नेटवर्क ॲक्सेस सक्षम करा."
       }
-    }
+    },
+    "ccDiscoveryAliasesEnvWarning": "__MISSING__:Active via environment variable (EXPOSE_CC_DISCOVERY_ALIASES) — this overrides any dashboard toggle below."
   },
   "comboControl": {
     "title": "कॉम्बो नियंत्रण केंद्र",

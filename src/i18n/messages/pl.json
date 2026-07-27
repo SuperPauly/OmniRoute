@@ -168,6 +168,10 @@
     "noModelsFound": "Nie znaleziono models",
     "clear": "Wyczyść",
     "done": "Gotowe",
+    "selectAll": "Zaznacz wszystko",
+    "unselectAll": "Odznacz wszystko",
+    "visibleModels": "widoczne",
+    "selectAllConfirm": "Dodać {count} modeli do tej kombinacji?",
     "errorOccurred": "Wystąpił błąd",
     "comboDeleted": "Usunięto combo",
     "hide": "Ukryj",
@@ -933,6 +937,7 @@
   "disabled": "Wyłączone",
   "featureFlagOmnirouteEmergencyFallbackDescription": "Kierowanie żądań z wyczerpanym budżetem do awaryjnego, bezpłatnego fallback provider/model.",
   "featureFlagArenaEloSyncEnabledDescription": "Włączenie okresowej synchronizacji ELO tabeli liderów Arena AI dla rankingów inteligencji model.",
+  "featureFlagExposeCcDiscoveryAliasesDescription": "__MISSING__:Advertise claude/<provider>/<model> mirror ids on /v1/models so Claude Code gateway model discovery lists non-Claude models. Warning: doubles catalog entries for all clients when enabled globally.",
   "sidebar": {
     "home": "Strona główna",
     "dashboard": "Dashboard",
@@ -2962,7 +2967,15 @@
     "copilotPasteInto": "Wklej do:",
     "copilotReloadInstruction": "Następnie uruchom ponownie VS Code i ustaw klucz API w polu wprowadzania.",
     "wireApiChatCompletions": "Chat Completions (/chat/completions)",
-    "wireApiResponses": "Responses API (/responses)"
+    "wireApiResponses": "Responses API (/responses)",
+    "ccDiscoveryInfoButton": "__MISSING__:How to enable discovery in Claude Code",
+    "ccDiscoveryInfoTooltip": "__MISSING__:Advertise non-Claude models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Doubles catalog entries for all clients when enabled globally.",
+    "ccDiscoveryInfoLink": "__MISSING__:Open Feature Flags",
+    "ccOnboardingTitle": "__MISSING__:settings.json for gateway model discovery",
+    "ccOnboardingCopy": "__MISSING__:Copy",
+    "ccOnboardingCopied": "__MISSING__:Copied",
+    "ccOnboardingKeyPlaceholder": "__MISSING__:<your OmniRoute API key>",
+    "ccOnboardingWindowNote": "__MISSING__:Claude Code assumes a 200K context window for any model id it does not recognize. For a model with a different real window, add CLAUDE_CODE_AUTO_COMPACT_WINDOW just under it so auto-compaction does not fire too early."
   },
   "combos": {
     "title": "Combos",
@@ -5985,7 +5998,19 @@
     "lmarenaWebCookieHint": "Otwórz arena.ai, zaloguj się, a następnie skopiuj pełny nagłówek Cookie z żądania Network. Dołącz arena-auth-prod-v1.0 i arena-auth-prod-v1.1 (oraz kolejne fragmenty, jeśli występują), najlepiej z cf_clearance. Nie wklejaj samego pustego cookie arena-auth-prod-v1. Opcjonalnie: providerSpecificData.recaptchaV3Token, jeśli create-evaluation nadal zwraca 403.",
     "kimiOfficialSupporterBadge": "Przyjaciel-założyciel",
     "kimiOfficialSupporterTooltip": "Kimi (Moonshot AI) jest przyjacielem-założycielem open source OmniRoute",
-    "kimiPartnerLinkNote": "Link partnerski — wspiera OmniRoute bez żadnych dodatkowych kosztów dla Ciebie"
+    "kimiPartnerLinkNote": "Link partnerski — wspiera OmniRoute bez żadnych dodatkowych kosztów dla Ciebie",
+    "ccAliasSectionTitle": "__MISSING__:Expose in Claude Code (claude/…)",
+    "ccAliasSectionHint": "__MISSING__:Advertise this provider's models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Off by default — enabling this doubles catalog entries for all clients.",
+    "ccAliasProviderLevelLabel": "__MISSING__:Provider default",
+    "ccAliasModelOverridesLabel": "__MISSING__:Per-model overrides",
+    "ccAliasModelOverrideAriaLabel": "__MISSING__:Override for {modelId}",
+    "ccAliasStateInherit": "__MISSING__:Inherit",
+    "ccAliasStateOn": "__MISSING__:On",
+    "ccAliasStateOff": "__MISSING__:Off",
+    "ccAliasAddModelPlaceholder": "__MISSING__:Model id (e.g. gpt-4o)",
+    "ccAliasAddModelButton": "__MISSING__:Add override",
+    "ccAliasLoadError": "__MISSING__:Failed to load discovery-alias settings: {error}",
+    "ccAliasSaveError": "__MISSING__:Failed to save discovery-alias setting: {error}"
   },
   "settings": {
     "title": "Ustawienia",
@@ -11823,7 +11848,8 @@
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Włącz dostęp do sieci w piaskownicy umiejętności."
       }
-    }
+    },
+    "ccDiscoveryAliasesEnvWarning": "__MISSING__:Active via environment variable (EXPOSE_CC_DISCOVERY_ALIASES) — this overrides any dashboard toggle below."
   },
   "comboControl": {
     "title": "Centrum sterowania Combo",

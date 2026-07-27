@@ -168,6 +168,10 @@
     "noModelsFound": "No models found",
     "clear": "Clear",
     "done": "Done",
+    "selectAll": "모두 선택",
+    "unselectAll": "선택 해제",
+    "visibleModels": "표시됨",
+    "selectAllConfirm": "이 조합에 모델 {count}개를 추가할까요?",
     "errorOccurred": "Error Occurred",
     "comboDeleted": "Combo Deleted",
     "hide": "Hide",
@@ -933,6 +937,7 @@
   "disabled": "비활성화됨",
   "featureFlagOmnirouteEmergencyFallbackDescription": "예산이 소진된 요청을 긴급 무료 폴백 제공자/모델로 라우팅합니다.",
   "featureFlagArenaEloSyncEnabledDescription": "모델 지능 순위를 위해 주기적인 Arena AI 리더보드 ELO 동기화를 활성화합니다.",
+  "featureFlagExposeCcDiscoveryAliasesDescription": "__MISSING__:Advertise claude/<provider>/<model> mirror ids on /v1/models so Claude Code gateway model discovery lists non-Claude models. Warning: doubles catalog entries for all clients when enabled globally.",
   "sidebar": {
     "home": "홈",
     "dashboard": "대시보드",
@@ -2940,7 +2945,15 @@
     "copilotPasteInto": "다음 위치에 붙여넣습니다.",
     "copilotReloadInstruction": "그런 다음 VS Code를 다시 로드하고 입력 프롬프트에 API 키를 설정하세요.",
     "wireApiChatCompletions": "채팅 완료(/chat/completions)",
-    "wireApiResponses": "응답 API(/responses)"
+    "wireApiResponses": "응답 API(/responses)",
+    "ccDiscoveryInfoButton": "__MISSING__:How to enable discovery in Claude Code",
+    "ccDiscoveryInfoTooltip": "__MISSING__:Advertise non-Claude models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Doubles catalog entries for all clients when enabled globally.",
+    "ccDiscoveryInfoLink": "__MISSING__:Open Feature Flags",
+    "ccOnboardingTitle": "__MISSING__:settings.json for gateway model discovery",
+    "ccOnboardingCopy": "__MISSING__:Copy",
+    "ccOnboardingCopied": "__MISSING__:Copied",
+    "ccOnboardingKeyPlaceholder": "__MISSING__:<your OmniRoute API key>",
+    "ccOnboardingWindowNote": "__MISSING__:Claude Code assumes a 200K context window for any model id it does not recognize. For a model with a different real window, add CLAUDE_CODE_AUTO_COMPACT_WINDOW just under it so auto-compaction does not fire too early."
   },
   "combos": {
     "title": "콤보",
@@ -5963,7 +5976,19 @@
     "lmarenaWebCookieHint": "arena.ai를 열고 로그인한 다음 Network 요청에서 전체 Cookie 헤더를 복사하세요. arena-auth-prod-v1.0 및 arena-auth-prod-v1.1(있는 경우 추가 청크 포함)을 포함해야 하며, 가급적 cf_clearance도 포함하는 것이 좋습니다. 비어 있는 arena-auth-prod-v1 쿠키만 붙여넣지 마세요. 선택 사항: create-evaluation에서 여전히 403을 반환하는 경우 providerSpecificData.recaptchaV3Token.",
     "kimiOfficialSupporterBadge": "창립 프렌드",
     "kimiOfficialSupporterTooltip": "Kimi(Moonshot AI)는 OmniRoute의 창립 오픈소스 프렌드입니다",
-    "kimiPartnerLinkNote": "파트너 링크 — 추가 비용 없이 OmniRoute를 지원합니다"
+    "kimiPartnerLinkNote": "파트너 링크 — 추가 비용 없이 OmniRoute를 지원합니다",
+    "ccAliasSectionTitle": "__MISSING__:Expose in Claude Code (claude/…)",
+    "ccAliasSectionHint": "__MISSING__:Advertise this provider's models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Off by default — enabling this doubles catalog entries for all clients.",
+    "ccAliasProviderLevelLabel": "__MISSING__:Provider default",
+    "ccAliasModelOverridesLabel": "__MISSING__:Per-model overrides",
+    "ccAliasModelOverrideAriaLabel": "__MISSING__:Override for {modelId}",
+    "ccAliasStateInherit": "__MISSING__:Inherit",
+    "ccAliasStateOn": "__MISSING__:On",
+    "ccAliasStateOff": "__MISSING__:Off",
+    "ccAliasAddModelPlaceholder": "__MISSING__:Model id (e.g. gpt-4o)",
+    "ccAliasAddModelButton": "__MISSING__:Add override",
+    "ccAliasLoadError": "__MISSING__:Failed to load discovery-alias settings: {error}",
+    "ccAliasSaveError": "__MISSING__:Failed to save discovery-alias setting: {error}"
   },
   "settings": {
     "title": "설정",
@@ -11801,7 +11826,8 @@
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "스킬 샌드박스에서 네트워크 액세스를 활성화합니다."
       }
-    }
+    },
+    "ccDiscoveryAliasesEnvWarning": "__MISSING__:Active via environment variable (EXPOSE_CC_DISCOVERY_ALIASES) — this overrides any dashboard toggle below."
   },
   "comboControl": {
     "title": "콤보 제어 센터",

@@ -591,6 +591,17 @@ export function recordModelLockoutFailure(
   options: {
     exactCooldownMs?: number | null;
     maxCooldownMs?: number;
+    /**
+     * #6863 vs #7940: set true only when `exactCooldownMs` came from an actual
+     * upstream signal (Retry-After header, X-RateLimit-Reset, or a reset parsed
+     * from the error body — i.e. `usedUpstreamRetryHint`/`quotaResetHintMs` from
+     * `checkFallbackError`). Such a reset is honored exactly, even past
+     * `maxCooldownMs` — a real "Resets in 92h" must not be clamped down to
+     * minutes, or the router hammers 429 against quota that is known not to be
+     * back yet. Leave false/omitted for SYNTHETIC estimates (the quota_exhausted
+     * until-midnight default below, plain exponential backoff) — those stay
+     * capped, per #7940.
+     */
     exactCooldownIsUpstreamReset?: boolean;
   } = {}
 ) {

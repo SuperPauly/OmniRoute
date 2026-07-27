@@ -23,6 +23,7 @@ import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
+import { resolveCcDiscoveryAliasStrip } from "@/lib/ccDiscoveryAliasResolve";
 import { handleComboChat, shouldSkipConnDisable } from "@omniroute/open-sse/services/combo.ts";
 import { mergeAbortSignals } from "@omniroute/open-sse/executors/base.ts";
 import { resolveRequestAutoControls } from "@omniroute/open-sse/services/autoCombo/requestControls.ts";
@@ -77,7 +78,6 @@ import {
   isAntigravityMissingProjectError,
   PROVIDER_BREAKER_FAILURE_STATUSES,
   shouldTripProviderBreakerForResult,
-  PROVIDER_BREAKER_FAILURE_STATUSES,
 } from "./chatPredicates";
 import { connectionHasExtraKeys } from "@omniroute/open-sse/services/apiKeyRotator.ts";
 import {
@@ -393,6 +393,17 @@ export async function handleChat(
   // resolveRoutingModel). The resolved model still passes through
   // enforceApiKeyPolicy below, so it cannot bypass per-key allowlists.
   let modelStr = resolveRoutingModel(request, body);
+
+  // cc discovery alias (`claude/<provider>/<model>`, `claude/combo/<name>`):
+  // resolve back to the real id before any combo lookup / resolveModelOrError()
+  // sees it — see resolveCcDiscoveryAliasStrip. A genuine claude/ model id (the
+  // real Claude OAuth provider namespace) is always left untouched.
+  const ccAliasStrip = await resolveCcDiscoveryAliasStrip(modelStr);
+  if (ccAliasStrip.stripped) {
+    log.debug("CC_DISCOVERY", `Resolved cc discovery alias: ${modelStr} → ${ccAliasStrip.model}`);
+    modelStr = ccAliasStrip.model;
+  }
+
   // Freeze the client-facing model and reasoning intent before automatic routers
   // mutate the working request. Reasoning policies always match this stable input.
   const reasoningIntent = extractReasoningIntent(modelStr, body);

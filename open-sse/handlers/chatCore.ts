@@ -128,7 +128,12 @@ import {
 import { getUnsupportedParams, REGISTRY } from "../config/providerRegistry.ts";
 import { stripUnsupportedParams } from "./chatCore/unsupportedParamsStrip.ts";
 import { checkToolCallingRequiredButUnsupported } from "./chatCore/toolCallingRequiredCheck.ts";
-import { supportsMaxTokens, getResolvedModelCapabilities } from "@/lib/modelCapabilities.ts";
+import {
+  supportsMaxTokens,
+  getResolvedModelCapabilities,
+  getExplicitModelOutputCap,
+} from "@/lib/modelCapabilities.ts";
+import { toPositiveInteger } from "../services/reasoningTokenBuffer.ts";
 import { normalizeThinkingForModel } from "@/shared/constants/modelSpecs.ts";
 import {
   buildErrorBody,
@@ -1811,11 +1816,20 @@ export async function handleChatCore({
     estimateTokens(body?.system) +
     estimateTokens(body?.instructions);
   const finalContextLimit = contextLimit;
+  // Key the lookup by { provider, model } — the bare-string form resolves to
+  // `provider: null`, which skips both the registry cap and the operator's
+  // `max_token` capability override (#6524), the documented escape hatch for a
+  // wrong synced `limit_output`. Clamping against a stale spec while the operator
+  // raised the ceiling would silently truncate output.
+  const modelOutputCap = toPositiveInteger(
+    getExplicitModelOutputCap({ provider, model: effectiveModel })
+  );
   const outputBudget = enforceOutputTokenBudget(
     body as Record<string, unknown>,
     finalEstimatedInputTokens,
     finalContextLimit,
-    targetFormat === FORMATS.CLAUDE && sourceFormat !== FORMATS.CLAUDE ? DEFAULT_MAX_TOKENS : 0
+    targetFormat === FORMATS.CLAUDE && sourceFormat !== FORMATS.CLAUDE ? DEFAULT_MAX_TOKENS : 0,
+    modelOutputCap
   );
   if (!outputBudget.ok) {
     const message =
@@ -1833,10 +1847,18 @@ export async function handleChatCore({
     );
   }
   if (outputBudget.adjustedFields.length > 0) {
+    // A field can also be adjusted by *removal* (invalid/non-positive value), which
+    // the cap did not cause — so state the ceiling in effect rather than claiming
+    // the cap drove this particular adjustment.
+    const modelCapIsBinding =
+      modelOutputCap != null && modelOutputCap < outputBudget.availableOutputTokens;
     log?.info?.(
       "CONTEXT",
       `Adjusted invalid or oversized output token fields (${outputBudget.adjustedFields.join(", ")}); ` +
-        `${outputBudget.availableOutputTokens} tokens remain for output`
+        `${outputBudget.availableOutputTokens} tokens remain for output` +
+        (modelCapIsBinding
+          ? ` (output ceiling in effect: ${modelOutputCap}, ${provider}/${effectiveModel}'s own cap)`
+          : "")
     );
   }
   body = outputBudget.body;
@@ -3769,7 +3791,8 @@ export async function handleChatCore({
               retryAfterMs,
               upstreamErrorCode,
               upstreamErrorType,
-              upstreamErrorBody
+              upstreamErrorBody,
+              { passthrough: sourceFormat === FORMATS.CLAUDE }
             );
           }
         } catch {
@@ -3788,7 +3811,8 @@ export async function handleChatCore({
             retryAfterMs,
             upstreamErrorCode,
             upstreamErrorType,
-            upstreamErrorBody
+            upstreamErrorBody,
+            { passthrough: sourceFormat === FORMATS.CLAUDE }
           );
         }
       } else {
@@ -3807,7 +3831,8 @@ export async function handleChatCore({
           retryAfterMs,
           upstreamErrorCode,
           upstreamErrorType,
-          upstreamErrorBody
+          upstreamErrorBody,
+          { passthrough: sourceFormat === FORMATS.CLAUDE }
         );
       }
     } else if (isContextOverflowError(statusCode, message)) {
@@ -3855,7 +3880,8 @@ export async function handleChatCore({
               retryAfterMs,
               upstreamErrorCode,
               upstreamErrorType,
-              upstreamErrorBody
+              upstreamErrorBody,
+              { passthrough: sourceFormat === FORMATS.CLAUDE }
             );
           }
         } catch {
@@ -3874,7 +3900,8 @@ export async function handleChatCore({
             retryAfterMs,
             upstreamErrorCode,
             upstreamErrorType,
-            upstreamErrorBody
+            upstreamErrorBody,
+            { passthrough: sourceFormat === FORMATS.CLAUDE }
           );
         }
       } else {
@@ -3893,7 +3920,8 @@ export async function handleChatCore({
           retryAfterMs,
           upstreamErrorCode,
           upstreamErrorType,
-          upstreamErrorBody
+          upstreamErrorBody,
+          { passthrough: sourceFormat === FORMATS.CLAUDE }
         );
       }
     } else {
@@ -3919,7 +3947,8 @@ export async function handleChatCore({
         retryAfterMs,
         upstreamErrorCode,
         upstreamErrorType,
-        upstreamErrorBody
+        upstreamErrorBody,
+        { passthrough: sourceFormat === FORMATS.CLAUDE }
       );
     }
     // ── End T5 ───────────────────────────────────────────────────────────────

@@ -168,6 +168,10 @@
     "noModelsFound": "لم يتم العثور على نماذج",
     "clear": "مسح",
     "done": "تم",
+    "selectAll": "تحديد الكل",
+    "unselectAll": "إلغاء تحديد الكل",
+    "visibleModels": "مرئي",
+    "selectAllConfirm": "إضافة {count} نموذجًا إلى هذه المجموعة؟",
     "errorOccurred": "حدث خطأ",
     "comboDeleted": "تم حذف المجموعة",
     "hide": "إخفاء",
@@ -933,6 +937,7 @@
   "disabled": "معطل",
   "featureFlagOmnirouteEmergencyFallbackDescription": "توجيه الطلبات التي استنفدت الميزانية إلى موفر/نموذج الاحتياط المجاني للطوارئ.",
   "featureFlagArenaEloSyncEnabledDescription": "تمكين المزامنة الدورية لتصنيف ELO للوحة صدارة Arena AI لتصنيفات ذكاء النماذج.",
+  "featureFlagExposeCcDiscoveryAliasesDescription": "__MISSING__:Advertise claude/<provider>/<model> mirror ids on /v1/models so Claude Code gateway model discovery lists non-Claude models. Warning: doubles catalog entries for all clients when enabled globally.",
   "sidebar": {
     "home": "الصفحة الرئيسية",
     "dashboard": "لوحة القيادة",
@@ -1114,7 +1119,7 @@
     "runtime": "وقت التشغيل",
     "consoleLogs": "سجلات وحدة التحكم",
     "logsTimeline": "Timeline",
-    "logsTimelineSubtitle": "Visual request timeline",
+    "logsTimelineSubtitle": "__MISSING__:Visual request timeline",
     "globalRouting": "التوجيه العام",
     "mitmProxy": "بروكسي MITM",
     "oneProxy": "1Proxy",
@@ -1160,7 +1165,6 @@
     "logsSubtitle": "سجلات التطبيق",
     "logsProxySubtitle": "سجلات حركة بروكسي",
     "consoleLogsSubtitle": "مخرجات وحدة التحكم",
-    "logsTimelineSubtitle": "__MISSING__:Visual request timeline",
     "logsActivitySubtitle": "سجل نشاط المستخدم",
     "healthSubtitle": "فحص صحة النظام",
     "costsPricingSubtitle": "قواعد التسعير لكل نموذج",
@@ -2941,7 +2945,15 @@
     "copilotPasteInto": "لصق في:",
     "copilotReloadInstruction": "ثم أعد تحميل VS Code وعيّن مفتاح API في موجه الإدخال.",
     "wireApiChatCompletions": "مكتملات الدردشة (/chat/مكتملات)",
-    "wireApiResponses": "واجهة برمجة تطبيقات الاستجابات (/ الاستجابات)"
+    "wireApiResponses": "واجهة برمجة تطبيقات الاستجابات (/ الاستجابات)",
+    "ccDiscoveryInfoButton": "__MISSING__:How to enable discovery in Claude Code",
+    "ccDiscoveryInfoTooltip": "__MISSING__:Advertise non-Claude models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Doubles catalog entries for all clients when enabled globally.",
+    "ccDiscoveryInfoLink": "__MISSING__:Open Feature Flags",
+    "ccOnboardingTitle": "__MISSING__:settings.json for gateway model discovery",
+    "ccOnboardingCopy": "__MISSING__:Copy",
+    "ccOnboardingCopied": "__MISSING__:Copied",
+    "ccOnboardingKeyPlaceholder": "__MISSING__:<your OmniRoute API key>",
+    "ccOnboardingWindowNote": "__MISSING__:Claude Code assumes a 200K context window for any model id it does not recognize. For a model with a different real window, add CLAUDE_CODE_AUTO_COMPACT_WINDOW just under it so auto-compaction does not fire too early."
   },
   "combos": {
     "title": "المجموعات",
@@ -5964,7 +5976,19 @@
     "lmarenaWebCookieHint": "افتح arena.ai، وسجل الدخول، ثم انسخ ترويسة Cookie الكاملة من طلب الشبكة. قم بتضمين arena-auth-prod-v1.0 و arena-auth-prod-v1.1 (وأي أجزاء أخرى إن وجدت)، ويفضل مع cf_clearance. لا تقم بلصق ملف تعريف الارتباط الفارغ arena-auth-prod-v1 فقط. اختياري: providerSpecificData.recaptchaV3Token إذا كان create-evaluation لا يزال يرجع 403.",
     "kimiOfficialSupporterBadge": "الصديق المؤسس",
     "kimiOfficialSupporterTooltip": "Kimi (Moonshot AI) هو الصديق المؤسس للمصادر المفتوحة لـ OmniRoute",
-    "kimiPartnerLinkNote": "رابط شريك — يدعم OmniRoute دون أي تكلفة إضافية عليك"
+    "kimiPartnerLinkNote": "رابط شريك — يدعم OmniRoute دون أي تكلفة إضافية عليك",
+    "ccAliasSectionTitle": "__MISSING__:Expose in Claude Code (claude/…)",
+    "ccAliasSectionHint": "__MISSING__:Advertise this provider's models under claude/<provider>/<model> mirror ids so Claude Code's gateway model discovery can list them. Off by default — enabling this doubles catalog entries for all clients.",
+    "ccAliasProviderLevelLabel": "__MISSING__:Provider default",
+    "ccAliasModelOverridesLabel": "__MISSING__:Per-model overrides",
+    "ccAliasModelOverrideAriaLabel": "__MISSING__:Override for {modelId}",
+    "ccAliasStateInherit": "__MISSING__:Inherit",
+    "ccAliasStateOn": "__MISSING__:On",
+    "ccAliasStateOff": "__MISSING__:Off",
+    "ccAliasAddModelPlaceholder": "__MISSING__:Model id (e.g. gpt-4o)",
+    "ccAliasAddModelButton": "__MISSING__:Add override",
+    "ccAliasLoadError": "__MISSING__:Failed to load discovery-alias settings: {error}",
+    "ccAliasSaveError": "__MISSING__:Failed to save discovery-alias setting: {error}"
   },
   "settings": {
     "title": "الإعدادات",
@@ -11802,7 +11826,8 @@
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "تمكين الوصول إلى الشبكة في بيئة اختبار المهارات المعزولة."
       }
-    }
+    },
+    "ccDiscoveryAliasesEnvWarning": "__MISSING__:Active via environment variable (EXPOSE_CC_DISCOVERY_ALIASES) — this overrides any dashboard toggle below."
   },
   "comboControl": {
     "title": "مركز تحكم Combo",
