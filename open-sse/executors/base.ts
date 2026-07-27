@@ -12,6 +12,10 @@ import {
   stripGroqUnsupportedFields,
 } from "../config/providerFieldStrips.ts";
 import {
+  recordLearnedThinkingCap,
+  parseThinkingBudgetMax,
+} from "../services/learnedThinkingCaps.ts";
+import {
   getParamFilterConfig,
   addParamToBlocklist,
   isAutoLearnGloballyEnabled,
@@ -226,6 +230,64 @@ export function mergeAbortSignals(primary: AbortSignal, secondary: AbortSignal):
 function hasActiveClaudeThinking(body: Record<string, unknown>): boolean {
   const thinking = body.thinking as Record<string, unknown> | undefined;
   return thinking?.type === "enabled" || thinking?.type === "adaptive";
+}
+
+/**
+ * Collect every `thinkingConfig` object in a transformed request body that holds
+ * a thinking budget, wherever the provider's envelope nests it:
+ *   - body.generationConfig.thinkingConfig            (native Gemini / openai→gemini)
+ *   - body.request.generationConfig.thinkingConfig    (Antigravity Cloud Code envelope)
+ * Returns only objects that actually carry a `thinkingBudget`/`thinking_budget`
+ * field — a request without thinking config is never mutated.
+ */
+function collectThinkingConfigs(body: unknown): Array<Record<string, unknown>> {
+  if (!body || typeof body !== "object") return [];
+  const root = body as Record<string, unknown>;
+  const configs: Array<Record<string, unknown>> = [];
+  const envelopes: unknown[] = [root.generationConfig, (root.request as Record<string, unknown> | undefined)?.generationConfig];
+  for (const env of envelopes) {
+    if (!env || typeof env !== "object") continue;
+    const tc = (env as Record<string, unknown>).thinkingConfig;
+    if (tc && typeof tc === "object") {
+      const tcr = tc as Record<string, unknown>;
+      if ("thinkingBudget" in tcr || "thinking_budget" in tcr) configs.push(tcr);
+    }
+  }
+  return configs;
+}
+
+/**
+ * Read the first thinking budget found in the body (any supported nest / naming).
+ * Returns null when the body carries no readable numeric budget.
+ */
+function readNestedThinkingBudget(body: unknown): number | null {
+  for (const tc of collectThinkingConfigs(body)) {
+    const raw = tc.thinkingBudget ?? tc.thinking_budget;
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/**
+ * Clamp every thinking budget in the body down to `max` (only lowers; never
+ * raises a budget already below max). Mutates in place. Returns true when at
+ * least one budget was actually lowered (i.e. a retry would send a different
+ * body) — false means the 400 was not caused by an over-max budget we hold, so
+ * retrying would resend an identical body and loop.
+ */
+function clampNestedThinkingBudget(body: unknown, max: number): boolean {
+  let changed = false;
+  for (const tc of collectThinkingConfigs(body)) {
+    for (const key of ["thinkingBudget", "thinking_budget"] as const) {
+      const n = Number(tc[key]);
+      if (Number.isFinite(n) && n > max) {
+        tc[key] = max;
+        changed = true;
+      }
+    }
+  }
+  return changed;
 }
 
 /**
@@ -722,6 +784,13 @@ export class BaseExecutor {
     // field-downgrade below, so each known field is stripped at most once across
     // all fallback URLs (bounded retry loop).
     const strippedFields = new Set<string>();
+    // Set by the thinking_budget 400 clamp-and-retry below: the upstream's
+    // advertised max (parsed from the error) is applied to every later
+    // retry/fallback URL so they don't re-hit the same 400. The clamp itself
+    // fires at most once per URL (guarded inline) so a persistent 400 cannot
+    // loop. The learned cap is also recorded process-wide via
+    // recordLearnedThinkingCap so future requests skip the 400 entirely.
+    let thinkingBudgetClampedMax: number | null = null;
 
     for (let urlIndex = 0; urlIndex < fallbackCount; urlIndex++) {
       const requestCredentials = withForcedResponsesUpstream(
@@ -774,6 +843,13 @@ export class BaseExecutor {
         transformedBody = stripGroqUnsupportedFields(
           transformedBody as Record<string, unknown>
         ) as typeof transformedBody;
+      }
+      // A previous URL in this execute() already hit a thinking_budget 400 and
+      // recorded the upstream's max. Pre-clamp this URL's fresh transformedBody
+      // so it doesn't re-hit the same 400 (avoids one wasted round-trip per
+      // fallback URL). No-op when nothing has been learned this execute().
+      if (thinkingBudgetClampedMax !== null) {
+        clampNestedThinkingBudget(transformedBody, thinkingBudgetClampedMax);
       }
 
       try {
@@ -1306,6 +1382,46 @@ export class BaseExecutor {
               `Upstream 400 rejected context_management on ${url} — retrying without it`
             );
             response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+          }
+        }
+
+        // Thinking-budget 400 clamp-and-retry (Gemini-family, any provider).
+        // The proactive capThinkingBudget clamp misses models outside MODEL_SPECS,
+        // so an xhigh budget (131072) can reach the upstream and bounce with
+        // "thinking_budget must be in the range [-1, N]". When that happens: parse
+        // the advertised max, record it process-wide (so FUTURE requests clamp
+        // proactively via capThinkingBudget → getLearnedThinkingCap), clamp the
+        // nested budget in the live transformedBody, and retry the same URL once.
+        // Subsequent requests never pay this 400→retry round-trip.
+        if (
+          response.status === HTTP_STATUS.BAD_REQUEST &&
+          thinkingBudgetClampedMax === null &&
+          transformedBody &&
+          typeof transformedBody === "object"
+        ) {
+          const errText = await response
+            .clone()
+            .text()
+            .catch(() => "");
+          const upstreamMax = parseThinkingBudgetMax(errText);
+          if (upstreamMax !== null) {
+            const currentBudget = readNestedThinkingBudget(transformedBody);
+            // Record under the budget that actually failed so the learned step
+            // ladder advances correctly; fall back to upstreamMax when the body
+            // carries no readable budget (still record so we stop re-hitting).
+            recordLearnedThinkingCap(this.provider, model, currentBudget ?? upstreamMax + 1);
+            thinkingBudgetClampedMax = upstreamMax;
+            if (clampNestedThinkingBudget(transformedBody, upstreamMax)) {
+              let retryBody = JSON.stringify(transformedBody);
+              if (isClaudeCodeCompatible(this.provider) || this.provider === "claude") {
+                retryBody = await signRequestBody(retryBody);
+              }
+              log?.info?.(
+                "THINKING_BUDGET",
+                `Upstream 400 rejected thinking_budget on ${url} — clamped to ${upstreamMax} and retrying (learned for ${this.provider}/${model})`
+              );
+              response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+            }
           }
         }
 

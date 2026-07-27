@@ -1569,8 +1569,8 @@ async function imsCheckToken(opts: {
   guestAllowed: boolean;
   fetchImpl: typeof fetch;
 }): Promise<
-  | { ok: true; token: string; data: ImsTokenResponse }
-  | { ok: false; status: number; error: string }
+  | { state: "ok"; token: string; data: ImsTokenResponse }
+  | { state: "failed"; status: number; error: string }
 > {
   const form = new URLSearchParams({
     client_id: opts.clientId,
@@ -1602,7 +1602,7 @@ async function imsCheckToken(opts: {
 
   if (!resp.ok) {
     return {
-      ok: false,
+      state: "failed",
       status: resp.status,
       error: sanitizeErrorMessage(
         data?.error_description || data?.error || text.slice(0, 200) || `HTTP ${resp.status}`
@@ -1613,14 +1613,14 @@ async function imsCheckToken(opts: {
   const token = String(data?.access_token || "").trim();
   if (!token) {
     return {
-      ok: false,
+      state: "failed",
       status: 401,
       error: sanitizeErrorMessage(
         data?.error_description || data?.error || "IMS response missing access_token"
       ),
     };
   }
-  return { ok: true, token, data: data || {} };
+  return { state: "ok", token, data: data || {} };
 }
 
 /**
@@ -1667,7 +1667,7 @@ export async function exchangeAdobeCookieForAccessToken(
       guestAllowed: false,
       fetchImpl,
     });
-    if (authed.ok) {
+    if (authed.state === "ok") {
       if (
         isAdobeGuestAccessToken(authed.token) ||
         authed.data.account_type === "guest" ||
@@ -1690,7 +1690,7 @@ export async function exchangeAdobeCookieForAccessToken(
       guestAllowed: true,
       fetchImpl,
     });
-    if (guest.ok) {
+    if (guest.state === "ok") {
       if (
         guest.data.account_type === "guest" ||
         guest.data.guestId ||

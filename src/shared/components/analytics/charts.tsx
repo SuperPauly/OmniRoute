@@ -684,7 +684,7 @@ export function ModelTable({ byModel, summary }) {
           <tbody className="divide-y divide-border">
             {sorted.map((m, i) => (
               <tr
-                key={m.model}
+                key={`${m.model}-${i}`}
                 className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors"
               >
                 <td className="px-4 py-2.5">
@@ -980,7 +980,7 @@ export function ProviderTable({ byProvider }) {
               const pct = totalTokens > 0 ? ((p.totalTokens / totalTokens) * 100).toFixed(1) : "0";
               return (
                 <tr
-                  key={p.provider}
+                  key={`${p.provider}-${i}`}
                   className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors"
                 >
                   <td className="px-4 py-2.5">

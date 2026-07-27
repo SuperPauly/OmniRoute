@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   normalizeForSearch,
   matchesSearch,
+  matchesAnyToken,
   compareTr,
 } from "../../src/shared/utils/turkishText.ts";
 
@@ -72,4 +73,30 @@ test("compareTr: null/undefined argümanları güvenli (?? '' guard)", () => {
   assert.equal(compareTr(null, "a") < 0, true);
   assert.equal(compareTr("a", null) > 0, true);
   assert.equal(compareTr(null, undefined), 0);
+});
+
+test("matchesAnyToken: tek token eşleşmesi", () => {
+  assert.equal(matchesAnyToken("pollinations", "pollinations sambanova"), true);
+});
+
+test("matchesAnyToken: birden fazla token'dan biri eşleşir", () => {
+  assert.equal(matchesAnyToken("sambanova", "pollinations sambanova huggingface"), true);
+});
+
+test("matchesAnyToken: hiçbir token eşleşmez", () => {
+  assert.equal(matchesAnyToken("openai", "pollinations sambanova"), false);
+});
+
+test("matchesAnyToken: Türkçe ve aksan duyarsız çoklu token eşleşmesi", () => {
+  assert.equal(matchesAnyToken("İstanbul Provider", "ankara istanbul"), true);
+});
+
+test("matchesAnyToken: boş veya yalnızca boşluk sorgusu her şeyi eşler", () => {
+  assert.equal(matchesAnyToken("herhangi", ""), true);
+  assert.equal(matchesAnyToken("herhangi", "   "), true);
+});
+
+test("matchesAnyToken: null/undefined text/query güvenli", () => {
+  assert.equal(matchesAnyToken(null, "test"), false);
+  assert.equal(matchesAnyToken("test", null), true);
 });

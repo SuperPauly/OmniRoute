@@ -47,6 +47,22 @@ export function matchesSearch(
   return normalizeForSearch(text).includes(q);
 }
 
+/**
+ * Checks if `text` matches any whitespace-separated token in `query`.
+ * Returns `true` if `query` is empty or if any token is found in `text`.
+ */
+export function matchesAnyToken(
+  text: string | null | undefined,
+  query: string | null | undefined
+): boolean {
+  const q = normalizeForSearch(query);
+  if (!q) return true;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const normText = normalizeForSearch(text);
+  return tokens.some((token) => normText.includes(token));
+}
+
 const trCollator = new Intl.Collator("tr", {
   sensitivity: "base",
   numeric: true,

@@ -398,7 +398,7 @@ export const CHAT_OPENAI_COMPAT_MODELS: Record<string, RegistryModel[]> = {
   // from the menu; old refs auto-forward via the codestral-2405 deprecation alias.
   codestral: buildModels(["codestral-2508", "codestral-latest"]),
   upstage: buildModels(["solar-pro3", "solar-mini"]),
-  maritalk: buildModels(["sabia-4", "sabia-3.1", "sabiazinho-4", "sabiazinho-3"]),
+  maritalk: buildModels(["sabia-4", "sabia-4-thinking", "sabiazinho-4"]),
   "xiaomi-mimo": [
     { id: "mimo-v2.5-pro", name: "MiMo-V2.5-Pro", contextLength: 1048576, maxOutputTokens: 131072 },
     { id: "mimo-v2.5", name: "MiMo-V2.5", contextLength: 1048576, maxOutputTokens: 131072 },

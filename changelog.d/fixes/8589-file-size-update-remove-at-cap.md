@@ -1,0 +1,1 @@
+- **fix(quality):** `check:file-size --update` now removes baseline entries that already fit the new-file cap even when LOC equals the frozen value (`redundant` path) — closes the #8584 gap where at-cap entries were stuck forever ([#8589](https://github.com/diegosouzapw/OmniRoute/pull/8589)) — thanks @MumuTW
